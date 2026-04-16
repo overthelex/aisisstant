@@ -28,6 +28,9 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: self-hosted
+    env:
+      XDG_RUNTIME_DIR: /run/user/1000
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
     steps:
       - uses: actions/checkout@v4
 
