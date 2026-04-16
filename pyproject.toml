@@ -1,0 +1,16 @@
+[project]
+name = "aisisstant"
+version = "2026.04.16"
+description = "Activity tracker agent for Ubuntu/GNOME"
+requires-python = ">=3.12"
+dependencies = [
+    "asyncpg>=0.29.0",
+    "evdev>=1.7.0",
+    "pydbus>=0.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.0",
+]

@@ -1,0 +1,99 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Lint & Test
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install --user --break-system-packages -r requirements.txt pytest pytest-asyncio
+
+      - name: Run tests
+        run: python3 -m pytest tests/ -v --tb=short
+
+  deploy:
+    name: Deploy
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install --user --break-system-packages -r requirements.txt
+
+      - name: Copy GNOME extension
+        run: |
+          EXT_DIR="$HOME/.local/share/gnome-shell/extensions/aisisstant-tracker@vovkes"
+          mkdir -p "$EXT_DIR"
+          cp gnome-extension/extension.js "$EXT_DIR/"
+          cp gnome-extension/metadata.json "$EXT_DIR/"
+
+      - name: Copy systemd service
+        run: |
+          mkdir -p "$HOME/.config/systemd/user"
+          cp systemd/aisisstant.service "$HOME/.config/systemd/user/"
+          systemctl --user daemon-reload
+
+      - name: Ensure PostgreSQL is running
+        run: docker compose up -d
+
+      - name: Restart service
+        run: |
+          systemctl --user enable aisisstant.service
+          systemctl --user restart aisisstant.service
+
+      - name: Health check
+        run: |
+          sleep 3
+          systemctl --user is-active aisisstant.service
+
+  release:
+    name: Release
+    needs: deploy
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: self-hosted
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate CalVer tag
+        id: tag
+        run: |
+          DATE_TAG=$(date +%Y.%m.%d)
+          EXISTING=$(git tag -l "${DATE_TAG}*" | wc -l)
+          if [ "$EXISTING" -eq 0 ]; then
+            TAG="$DATE_TAG"
+          else
+            TAG="${DATE_TAG}.${EXISTING}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Generated tag: $TAG"
+
+      - name: Create git tag
+        run: |
+          git tag ${{ steps.tag.outputs.tag }}
+          git push origin ${{ steps.tag.outputs.tag }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ steps.tag.outputs.tag }} \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --generate-notes
