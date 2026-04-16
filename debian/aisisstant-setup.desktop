@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Aisisstant Settings
+GenericName=Activity Tracker
+Comment=Configure activity tracking (keyboard, mouse, windows, microphone)
+Exec=aisisstant-setup
+Icon=utilities-system-monitor
+Terminal=false
+Type=Application
+Categories=Settings;System;Monitor;
+Keywords=activity;tracker;keyboard;mouse;window;productivity;
+StartupNotify=true

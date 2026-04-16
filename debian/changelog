@@ -1,0 +1,9 @@
+aisisstant (2026.04.16-1) unstable; urgency=medium
+
+  * Initial release
+  * Activity tracker: keyboard, mouse, window, microphone
+  * PostgreSQL storage in Docker
+  * GTK4/Adwaita setup wizard
+  * CalVer versioning
+
+ -- Vovkes <shepherdvovkes@gmail.com>  Wed, 16 Apr 2026 13:00:00 +0300

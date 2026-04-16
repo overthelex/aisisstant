@@ -1,0 +1,1079 @@
+#!/usr/bin/env python3
+"""Aisisstant Setup Wizard & Settings UI.
+
+GTK4/Adwaita application for initial setup and configuration management.
+Launched automatically after package installation or from the app menu.
+"""
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+
+import grp
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from gi.repository import Adw, Gio, GLib, Gtk
+
+APP_NAME = "Aisisstant"
+APP_ID = "com.aisisstant.Setup"
+SERVICE_NAME = "aisisstant.service"
+EXTENSION_UUID = "aisisstant-tracker@vovkes"
+DB_CONTAINER = "aisisstant-db"
+VERSION = "2026.04.16"
+
+CONFIG_DIR = Path.home() / ".config" / "aisisstant"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+# ---------------------------------------------------------------------------
+# System checks
+# ---------------------------------------------------------------------------
+
+def is_in_input_group() -> bool:
+    try:
+        input_gid = grp.getgrnam("input").gr_gid
+        return input_gid in os.getgroups()
+    except KeyError:
+        return False
+
+
+def add_to_input_group() -> bool:
+    try:
+        result = subprocess.run(
+            ["pkexec", "usermod", "-aG", "input", os.getlogin()],
+            capture_output=True, text=True, timeout=60,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def is_accessibility_enabled() -> bool:
+    try:
+        result = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "toolkit-accessibility"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() == "true"
+    except Exception:
+        return False
+
+
+def enable_accessibility() -> bool:
+    try:
+        result = subprocess.run(
+            ["gsettings", "set", "org.gnome.desktop.interface", "toolkit-accessibility", "true"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def is_extension_enabled() -> bool:
+    try:
+        result = subprocess.run(
+            ["gnome-extensions", "info", EXTENSION_UUID],
+            capture_output=True, text=True, timeout=5,
+        )
+        return "ENABLED" in result.stdout
+    except Exception:
+        return False
+
+
+def enable_extension() -> bool:
+    try:
+        result = subprocess.run(
+            ["gnome-extensions", "enable", EXTENSION_UUID],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def is_docker_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", f"name={DB_CONTAINER}", "--format", "{{.Status}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return "Up" in result.stdout
+    except Exception:
+        return False
+
+
+def start_docker_db() -> bool:
+    try:
+        compose_paths = [
+            Path.home() / "aisisstant" / "docker-compose.yml",
+            Path("/usr/share/aisisstant/docker-compose.yml"),
+            Path(__file__).parent / "docker-compose.yml",
+        ]
+        compose_dir = None
+        for p in compose_paths:
+            if p.exists():
+                compose_dir = str(p.parent)
+                break
+        if compose_dir is None:
+            return False
+        result = subprocess.run(
+            ["docker", "compose", "up", "-d"],
+            capture_output=True, text=True, timeout=60,
+            cwd=compose_dir,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def is_service_enabled() -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-enabled", SERVICE_NAME],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() == "enabled"
+    except Exception:
+        return False
+
+
+def is_service_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", SERVICE_NAME],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def enable_and_start_service() -> bool:
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "daemon-reload"],
+            capture_output=True, timeout=5,
+        )
+        subprocess.run(
+            ["systemctl", "--user", "enable", SERVICE_NAME],
+            capture_output=True, timeout=5,
+        )
+        result = subprocess.run(
+            ["systemctl", "--user", "start", SERVICE_NAME],
+            capture_output=True, timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def stop_service() -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "stop", SERVICE_NAME],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def restart_service() -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "restart", SERVICE_NAME],
+            capture_output=True, timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def load_config() -> dict:
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_config(data: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving config: {e}", file=sys.stderr)
+
+
+def get_db_row_counts() -> dict:
+    """Get row counts from the database for the status display."""
+    try:
+        result = subprocess.run(
+            [
+                "psql", "-h", "127.0.0.1", "-p", "5438",
+                "-U", "aisisstant", "-d", "aisisstant",
+                "-t", "-A", "-c",
+                "SELECT json_build_object("
+                "'input', (SELECT count(*) FROM input_activity),"
+                "'windows', (SELECT count(*) FROM window_sessions),"
+                "'scores', (SELECT count(*) FROM activity_scores),"
+                "'mic', (SELECT count(*) FROM mic_activity),"
+                "'idle', (SELECT count(*) FROM idle_events))",
+            ],
+            capture_output=True, text=True, timeout=5,
+            env={**os.environ, "PGPASSWORD": "aisisstant_dev"},
+        )
+        if result.returncode == 0:
+            return json.loads(result.stdout.strip())
+    except Exception:
+        pass
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Splash Screen
+# ---------------------------------------------------------------------------
+
+SPLASH_CSS = """
+.splash-window {
+    background: linear-gradient(160deg, #0d1117 0%, #161b22 40%, #1a2332 100%);
+}
+.splash-title {
+    font-size: 42px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    color: #ffffff;
+    text-shadow: 0 2px 12px rgba(88, 166, 255, 0.5);
+}
+.splash-subtitle {
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: 5px;
+    color: #58a6ff;
+}
+.splash-divider {
+    background-color: #58a6ff;
+    min-height: 2px;
+    opacity: 0.6;
+}
+.splash-version {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+    letter-spacing: 2px;
+}
+.splash-authors {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+}
+.splash-author-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+}
+.splash-copyright {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.35);
+}
+.splash-icon {
+    font-size: 64px;
+    color: #58a6ff;
+}
+.splash-next {
+    background: rgba(255,255,255,0.15);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.3);
+    min-width: 120px;
+    font-weight: 600;
+}
+.splash-next:hover {
+    background: rgba(255,255,255,0.25);
+}
+"""
+
+
+def _build_splash_content(with_next_btn=False, on_next=None):
+    """Build the splash/branding content box. Reused in SplashScreen and Wizard."""
+    overlay = Gtk.Overlay()
+    bg = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True, hexpand=True)
+    bg.add_css_class("splash-window")
+    overlay.set_child(bg)
+
+    content = Gtk.Box(
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=0,
+        halign=Gtk.Align.CENTER,
+        valign=Gtk.Align.CENTER,
+        margin_start=40,
+        margin_end=40,
+    )
+
+    # Icon
+    icon = Gtk.Label(label="\U0001f441")  # eye emoji
+    icon.add_css_class("splash-icon")
+    icon.set_margin_bottom(8)
+    content.append(icon)
+
+    title = Gtk.Label(label="AISISSTANT")
+    title.add_css_class("splash-title")
+    content.append(title)
+
+    subtitle = Gtk.Label(label="ACTIVITY INTELLIGENCE")
+    subtitle.add_css_class("splash-subtitle")
+    subtitle.set_margin_top(4)
+    content.append(subtitle)
+
+    divider = Gtk.Separator()
+    divider.add_css_class("splash-divider")
+    divider.set_margin_top(24)
+    divider.set_margin_bottom(24)
+    divider.set_size_request(200, -1)
+    divider.set_halign(Gtk.Align.CENTER)
+    content.append(divider)
+
+    authors_label = Gtk.Label(label="CREATED BY")
+    authors_label.add_css_class("splash-version")
+    authors_label.set_margin_bottom(10)
+    content.append(authors_label)
+
+    author1 = Gtk.Label(label="Vladimir Obcharov")
+    author1.add_css_class("splash-author-name")
+    content.append(author1)
+
+    ampersand = Gtk.Label(label="&")
+    ampersand.add_css_class("splash-authors")
+    ampersand.set_margin_top(4)
+    ampersand.set_margin_bottom(4)
+    content.append(ampersand)
+
+    author2 = Gtk.Label(label="Claude Code")
+    author2.add_css_class("splash-author-name")
+    content.append(author2)
+
+    version_box = Gtk.Box(
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=4,
+        halign=Gtk.Align.CENTER,
+        margin_top=28,
+    )
+    version = Gtk.Label(label=f"VERSION {VERSION}")
+    version.add_css_class("splash-version")
+    version_box.append(version)
+
+    copyright_lbl = Gtk.Label(label="\u00A9 2026  All rights reserved")
+    copyright_lbl.add_css_class("splash-copyright")
+    version_box.append(copyright_lbl)
+    content.append(version_box)
+
+    if with_next_btn and on_next:
+        next_btn = Gtk.Button(label="Next")
+        next_btn.add_css_class("splash-next")
+        next_btn.add_css_class("pill")
+        next_btn.set_halign(Gtk.Align.CENTER)
+        next_btn.set_margin_top(20)
+        next_btn.connect("clicked", lambda _: on_next())
+        content.append(next_btn)
+
+    overlay.add_overlay(content)
+    return overlay
+
+
+class SplashScreen(Adw.Window):
+    def __init__(self, app, on_done=None):
+        super().__init__(
+            application=app,
+            title=APP_NAME,
+            default_width=520,
+            default_height=480,
+            resizable=False,
+            decorated=False,
+            modal=True,
+        )
+        self._on_done = on_done
+        self.set_content(_build_splash_content())
+        GLib.timeout_add(3000, self._close_splash)
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_: self._close_splash())
+        self.add_controller(click)
+
+    def _close_splash(self):
+        self.close()
+        if self._on_done:
+            GLib.idle_add(self._on_done)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Setup Wizard
+# ---------------------------------------------------------------------------
+
+class SetupWizard(Adw.ApplicationWindow):
+    def __init__(self, app, on_finish=None, show_splash=False):
+        super().__init__(
+            application=app,
+            title="Aisisstant Setup",
+            default_width=600,
+            default_height=620,
+            resizable=False,
+        )
+        self._on_finish = on_finish
+        self._show_splash = show_splash
+        self._pages = []
+        self._current = 0
+
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_string(SPLASH_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            self.get_display(), css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+        self._build_ui()
+
+    def _build_ui(self):
+        self._stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT)
+
+        # --- Page 0: Splash ---
+        if self._show_splash:
+            splash = _build_splash_content(with_next_btn=True, on_next=self._go_next)
+            self._stack.add_named(splash, "splash")
+            self._pages.append("splash")
+
+        # --- Page 1: Welcome + Install ---
+        welcome = self._make_page(
+            icon_name="utilities-system-monitor-symbolic",
+            title="Welcome to Aisisstant",
+            description=(
+                "Aisisstant tracks your activity across all applications \u2014 "
+                "keyboard, mouse, window focus, microphone \u2014 and scores "
+                "active vs passive vs idle time.\n\n"
+                "Press Install to set up everything automatically."
+            ),
+        )
+        welcome_box = welcome._inner_box
+
+        self._install_btn = Gtk.Button(label="Install")
+        self._install_btn.add_css_class("suggested-action")
+        self._install_btn.add_css_class("pill")
+        self._install_btn.set_halign(Gtk.Align.CENTER)
+        self._install_btn.set_margin_top(8)
+        self._install_btn.connect("clicked", self._on_install)
+        welcome_box.append(self._install_btn)
+
+        self._install_status = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=6,
+            halign=Gtk.Align.CENTER,
+            margin_top=12,
+        )
+        welcome_box.append(self._install_status)
+
+        self._stack.add_named(welcome, "welcome")
+        self._pages.append("welcome")
+
+        # --- Page 2: Input Group ---
+        in_group = is_in_input_group()
+        group_desc = (
+            "Aisisstant needs access to keyboard and mouse input devices.\n"
+            "Your user must be in the 'input' system group."
+        )
+        if in_group:
+            group_desc += "\n\n\u2705 You are already in the input group."
+
+        group_page = self._make_page(
+            icon_name="input-keyboard-symbolic",
+            title="Keyboard & Mouse Access",
+            description=group_desc,
+        )
+        if not in_group:
+            self._group_btn = Gtk.Button(label="Add me to input group")
+            self._group_btn.add_css_class("suggested-action")
+            self._group_btn.add_css_class("pill")
+            self._group_btn.set_halign(Gtk.Align.CENTER)
+            self._group_btn.connect("clicked", self._on_add_group)
+            self._group_status = Gtk.Label(label="")
+            self._group_status.add_css_class("dim-label")
+            group_page._inner_box.append(self._group_btn)
+            group_page._inner_box.append(self._group_status)
+
+        self._stack.add_named(group_page, "group")
+        self._pages.append("group")
+
+        # --- Page 3: Accessibility ---
+        a11y = is_accessibility_enabled()
+        a11y_desc = (
+            "AT-SPI accessibility is used to track active window titles\n"
+            "(browser tabs, terminal tabs, email subjects, etc.)."
+        )
+        if a11y:
+            a11y_desc += "\n\n\u2705 Accessibility is already enabled."
+        else:
+            a11y_desc += "\n\n\u26a0\ufe0f Accessibility is disabled. Some apps (Thunderbird, Snap apps) won't be tracked."
+
+        a11y_page = self._make_page(
+            icon_name="preferences-desktop-accessibility-symbolic",
+            title="Accessibility (AT-SPI)",
+            description=a11y_desc,
+        )
+        if not a11y:
+            self._a11y_btn = Gtk.Button(label="Enable Accessibility")
+            self._a11y_btn.add_css_class("suggested-action")
+            self._a11y_btn.add_css_class("pill")
+            self._a11y_btn.set_halign(Gtk.Align.CENTER)
+            self._a11y_btn.connect("clicked", self._on_enable_a11y)
+            self._a11y_status = Gtk.Label(label="")
+            self._a11y_status.add_css_class("dim-label")
+            a11y_page._inner_box.append(self._a11y_btn)
+            a11y_page._inner_box.append(self._a11y_status)
+
+        self._stack.add_named(a11y_page, "a11y")
+        self._pages.append("a11y")
+
+        # --- Page 4: Database ---
+        db_running = is_docker_running()
+        db_desc = (
+            "Aisisstant stores all activity data in PostgreSQL running in Docker.\n"
+            "The database is bound to localhost only (127.0.0.1:5438)."
+        )
+        if db_running:
+            db_desc += "\n\n\u2705 PostgreSQL container is already running."
+
+        db_page = self._make_page(
+            icon_name="drive-multidisk-symbolic",
+            title="Database (PostgreSQL)",
+            description=db_desc,
+        )
+        if not db_running:
+            self._db_btn = Gtk.Button(label="Start PostgreSQL")
+            self._db_btn.add_css_class("suggested-action")
+            self._db_btn.add_css_class("pill")
+            self._db_btn.set_halign(Gtk.Align.CENTER)
+            self._db_btn.connect("clicked", self._on_start_db)
+            self._db_status = Gtk.Label(label="")
+            self._db_status.add_css_class("dim-label")
+            db_page._inner_box.append(self._db_btn)
+            db_page._inner_box.append(self._db_status)
+
+        self._stack.add_named(db_page, "database")
+        self._pages.append("database")
+
+        # --- Page 5: Start Service ---
+        start_page = self._make_page(
+            icon_name="media-playback-start-symbolic",
+            title="Start Aisisstant",
+            description=(
+                "Everything is configured. Start the activity tracker now?\n\n"
+                "The service will start automatically on login."
+            ),
+        )
+        self._start_btn = Gtk.Button(label="Enable & Start Service")
+        self._start_btn.add_css_class("suggested-action")
+        self._start_btn.add_css_class("pill")
+        self._start_btn.set_halign(Gtk.Align.CENTER)
+        self._start_btn.connect("clicked", self._on_start_service)
+        self._start_status = Gtk.Label(label="")
+        self._start_status.add_css_class("dim-label")
+        start_page._inner_box.append(self._start_btn)
+        start_page._inner_box.append(self._start_status)
+
+        self._stack.add_named(start_page, "start")
+        self._pages.append("start")
+
+        # --- Navigation ---
+        self._header = Adw.HeaderBar()
+        self._back_btn = Gtk.Button(label="Back")
+        self._back_btn.connect("clicked", self._go_back)
+        self._back_btn.set_visible(False)
+        self._header.pack_start(self._back_btn)
+
+        self._next_btn = Gtk.Button(label="Next")
+        self._next_btn.add_css_class("suggested-action")
+        self._next_btn.connect("clicked", self._go_next)
+        self._header.pack_end(self._next_btn)
+
+        # Progress dots
+        non_splash = [p for p in self._pages if p != "splash"]
+        self._dots_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+            halign=Gtk.Align.CENTER,
+        )
+        for i in range(len(non_splash)):
+            dot = Gtk.Label(label="\u25cf" if i == 0 else "\u25cb")
+            dot.add_css_class("dim-label")
+            self._dots_box.append(dot)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        main_box.append(self._header)
+        main_box.append(self._stack)
+        main_box.append(Gtk.Separator())
+        self._dots_box.set_margin_top(12)
+        self._dots_box.set_margin_bottom(12)
+        main_box.append(self._dots_box)
+
+        self.set_content(main_box)
+        self._update_nav()
+
+    def _make_page(self, icon_name, title, description):
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=16,
+            margin_top=32, margin_bottom=16,
+            margin_start=24, margin_end=24,
+            vexpand=True,
+        )
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_pixel_size(64)
+        icon.add_css_class("dim-label")
+        box.append(icon)
+
+        lbl = Gtk.Label(label=title)
+        lbl.add_css_class("title-1")
+        box.append(lbl)
+
+        desc = Gtk.Label(
+            label=description,
+            wrap=True, justify=Gtk.Justification.CENTER,
+            max_width_chars=60,
+        )
+        desc.add_css_class("body")
+        box.append(desc)
+
+        scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_child(box)
+        scroll._inner_box = box
+        return scroll
+
+    def _update_nav(self):
+        on_splash = self._show_splash and self._pages[self._current] == "splash"
+        self._header.set_visible(not on_splash)
+        self._back_btn.set_visible(self._current > 0 and not on_splash)
+        self._next_btn.set_visible(not on_splash)
+        self._dots_box.set_visible(not on_splash)
+
+        is_last = self._current == len(self._pages) - 1
+        self._next_btn.set_label("Finish" if is_last else "Next")
+
+        # Update dots
+        dot_idx = self._current - (1 if self._show_splash else 0)
+        child = self._dots_box.get_first_child()
+        i = 0
+        while child:
+            child.set_label("\u25cf" if i == dot_idx else "\u25cb")
+            child = child.get_next_sibling()
+            i += 1
+
+    def _go_next(self, _btn=None):
+        if self._current == len(self._pages) - 1:
+            self._finish()
+            return
+        self._current += 1
+        self._stack.set_visible_child_name(self._pages[self._current])
+        self._update_nav()
+
+    def _go_back(self, _btn=None):
+        if self._current > 0:
+            self._current -= 1
+            self._stack.set_visible_child_name(self._pages[self._current])
+            self._update_nav()
+
+    def _add_status_line(self, text, success=True):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, halign=Gtk.Align.CENTER)
+        icon = Gtk.Image.new_from_icon_name(
+            "emblem-ok-symbolic" if success else "dialog-warning-symbolic"
+        )
+        if success:
+            icon.add_css_class("success")
+        else:
+            icon.add_css_class("warning")
+        row.append(icon)
+        row.append(Gtk.Label(label=text))
+        self._install_status.append(row)
+
+    def _on_install(self, btn):
+        btn.set_sensitive(False)
+        btn.set_label("Installing...")
+
+        # 1. Input group
+        if is_in_input_group():
+            self._add_status_line("Input group \u2014 already configured")
+        else:
+            if add_to_input_group():
+                self._add_status_line("Input group \u2014 added (re-login required)")
+            else:
+                self._add_status_line("Input group \u2014 failed, run: sudo usermod -aG input $USER", False)
+
+        # 2. Accessibility
+        if is_accessibility_enabled():
+            self._add_status_line("Accessibility (AT-SPI) \u2014 already enabled")
+        else:
+            if enable_accessibility():
+                self._add_status_line("Accessibility (AT-SPI) \u2014 enabled")
+            else:
+                self._add_status_line("Accessibility \u2014 failed to enable", False)
+
+        # 3. GNOME extension
+        if is_extension_enabled():
+            self._add_status_line("GNOME extension \u2014 already enabled")
+        else:
+            if enable_extension():
+                self._add_status_line("GNOME extension \u2014 enabled")
+            else:
+                self._add_status_line("GNOME extension \u2014 will activate after re-login")
+
+        # 4. Docker PostgreSQL
+        if is_docker_running():
+            self._add_status_line("PostgreSQL \u2014 already running")
+        else:
+            if start_docker_db():
+                self._add_status_line("PostgreSQL \u2014 started")
+            else:
+                self._add_status_line("PostgreSQL \u2014 failed to start", False)
+
+        # 5. Systemd service
+        if enable_and_start_service():
+            self._add_status_line("Service \u2014 enabled and started")
+        else:
+            self._add_status_line("Service \u2014 failed to start", False)
+
+        btn.set_label("Installed")
+
+        configure_btn = Gtk.Button(label="Configure Settings")
+        configure_btn.add_css_class("pill")
+        configure_btn.set_halign(Gtk.Align.CENTER)
+        configure_btn.set_margin_top(12)
+        configure_btn.connect("clicked", lambda _: self._go_next())
+        self._install_status.append(configure_btn)
+
+    def _on_add_group(self, btn):
+        btn.set_sensitive(False)
+        if add_to_input_group():
+            self._group_status.set_label("Added! Log out and back in for this to take effect.")
+            self._group_status.add_css_class("success")
+        else:
+            self._group_status.set_label("Failed. Try: sudo usermod -aG input $USER")
+            self._group_status.add_css_class("error")
+            btn.set_sensitive(True)
+
+    def _on_enable_a11y(self, btn):
+        btn.set_sensitive(False)
+        if enable_accessibility():
+            self._a11y_status.set_label("Enabled! Snap apps may need restart to be tracked.")
+            self._a11y_status.add_css_class("success")
+        else:
+            self._a11y_status.set_label("Failed to enable accessibility.")
+            self._a11y_status.add_css_class("error")
+            btn.set_sensitive(True)
+
+    def _on_start_db(self, btn):
+        btn.set_sensitive(False)
+        btn.set_label("Starting...")
+        if start_docker_db():
+            self._db_status.set_label("PostgreSQL started on 127.0.0.1:5438")
+            self._db_status.add_css_class("success")
+        else:
+            self._db_status.set_label("Failed. Check: docker compose up -d")
+            self._db_status.add_css_class("error")
+            btn.set_sensitive(True)
+        btn.set_label("Start PostgreSQL")
+
+    def _on_start_service(self, btn):
+        btn.set_sensitive(False)
+        if enable_and_start_service():
+            self._start_status.set_label("Service started and enabled on login!")
+            self._start_status.add_css_class("success")
+        else:
+            self._start_status.set_label("Failed. Check: systemctl --user status aisisstant")
+            self._start_status.add_css_class("error")
+            btn.set_sensitive(True)
+
+    def _finish(self):
+        self.close()
+        if self._on_finish:
+            self._on_finish()
+
+
+# ---------------------------------------------------------------------------
+# Settings Window
+# ---------------------------------------------------------------------------
+
+class SettingsWindow(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(
+            application=app,
+            title="Aisisstant Settings",
+            default_width=550,
+            default_height=650,
+        )
+        self._build_ui()
+
+    def _build_ui(self):
+        config = load_config()
+        running = is_service_running()
+        enabled = is_service_enabled()
+
+        header = Adw.HeaderBar()
+        content = Adw.PreferencesPage()
+
+        # --- Service Status ---
+        svc_group = Adw.PreferencesGroup(title="Service")
+
+        self._status_row = Adw.ActionRow(
+            title="Aisisstant Tracker",
+            subtitle="Running" if running else "Stopped",
+        )
+        status_icon = Gtk.Image.new_from_icon_name(
+            "emblem-ok-symbolic" if running else "media-playback-stop-symbolic"
+        )
+        if running:
+            status_icon.add_css_class("success")
+        else:
+            status_icon.add_css_class("error")
+        self._status_row.add_prefix(status_icon)
+
+        self._toggle_btn = Gtk.Button(label="Stop" if running else "Start")
+        self._toggle_btn.set_valign(Gtk.Align.CENTER)
+        if running:
+            self._toggle_btn.add_css_class("destructive-action")
+        else:
+            self._toggle_btn.add_css_class("suggested-action")
+        self._toggle_btn.connect("clicked", self._on_toggle_service)
+        self._status_row.add_suffix(self._toggle_btn)
+        svc_group.add(self._status_row)
+
+        autostart_row = Adw.SwitchRow(
+            title="Start on Login",
+            subtitle="Enable systemd user service",
+            active=enabled,
+        )
+        autostart_row.connect("notify::active", self._on_autostart_toggled)
+        svc_group.add(autostart_row)
+        content.add(svc_group)
+
+        # --- Collectors ---
+        col_group = Adw.PreferencesGroup(title="Collectors")
+
+        self._bucket_row = Adw.SpinRow.new_with_range(1, 30, 1)
+        self._bucket_row.set_title("Input Bucket (seconds)")
+        self._bucket_row.set_subtitle("How often keyboard/mouse data is aggregated")
+        self._bucket_row.set_value(config.get("input_bucket_seconds", 5))
+        col_group.add(self._bucket_row)
+
+        self._window_row = Adw.SpinRow.new_with_range(0.5, 10, 0.5)
+        self._window_row.set_title("Window Poll (seconds)")
+        self._window_row.set_subtitle("How often active window is checked")
+        self._window_row.set_value(config.get("window_poll_seconds", 2.0))
+        col_group.add(self._window_row)
+
+        self._mic_row = Adw.SpinRow.new_with_range(5, 60, 5)
+        self._mic_row.set_title("Microphone Poll (seconds)")
+        self._mic_row.set_subtitle("How often PipeWire mic status is checked")
+        self._mic_row.set_value(config.get("mic_poll_seconds", 10.0))
+        col_group.add(self._mic_row)
+
+        self._score_row = Adw.SpinRow.new_with_range(10, 120, 5)
+        self._score_row.set_title("Score Window (seconds)")
+        self._score_row.set_subtitle("Activity scoring interval")
+        self._score_row.set_value(config.get("score_window_seconds", 30))
+        col_group.add(self._score_row)
+
+        content.add(col_group)
+
+        # --- Database Stats ---
+        stats_group = Adw.PreferencesGroup(title="Database")
+
+        db_row = Adw.ActionRow(
+            title="PostgreSQL",
+            subtitle="Running" if is_docker_running() else "Stopped",
+        )
+        db_icon = Gtk.Image.new_from_icon_name(
+            "emblem-ok-symbolic" if is_docker_running() else "dialog-warning-symbolic"
+        )
+        db_row.add_prefix(db_icon)
+        stats_group.add(db_row)
+
+        counts = get_db_row_counts()
+        if counts:
+            stats_text = (
+                f"Input: {counts.get('input', 0):,} | "
+                f"Windows: {counts.get('windows', 0):,} | "
+                f"Scores: {counts.get('scores', 0):,}"
+            )
+            stats_row = Adw.ActionRow(title="Records", subtitle=stats_text)
+            stats_row.add_prefix(Gtk.Image.new_from_icon_name("drive-multidisk-symbolic"))
+            stats_group.add(stats_row)
+
+        content.add(stats_group)
+
+        # --- System ---
+        sys_group = Adw.PreferencesGroup(title="System")
+
+        group_row = Adw.ActionRow(
+            title="Input Group",
+            subtitle="In group" if is_in_input_group() else "Not in group (required)",
+        )
+        group_row.add_prefix(Gtk.Image.new_from_icon_name(
+            "emblem-ok-symbolic" if is_in_input_group() else "dialog-warning-symbolic"
+        ))
+        sys_group.add(group_row)
+
+        a11y_row = Adw.ActionRow(
+            title="Accessibility (AT-SPI)",
+            subtitle="Enabled" if is_accessibility_enabled() else "Disabled",
+        )
+        a11y_row.add_prefix(Gtk.Image.new_from_icon_name(
+            "emblem-ok-symbolic" if is_accessibility_enabled() else "dialog-warning-symbolic"
+        ))
+        sys_group.add(a11y_row)
+
+        log_row = Adw.ActionRow(title="View Logs")
+        log_row.set_activatable(True)
+        log_row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        log_row.connect("activated", self._on_view_logs)
+        sys_group.add(log_row)
+
+        content.add(sys_group)
+
+        # --- Save ---
+        save_group = Adw.PreferencesGroup()
+        save_btn = Gtk.Button(label="Save Settings")
+        save_btn.add_css_class("suggested-action")
+        save_btn.add_css_class("pill")
+        save_btn.set_halign(Gtk.Align.CENTER)
+        save_btn.set_margin_top(8)
+        save_btn.set_margin_bottom(8)
+        save_btn.connect("clicked", self._on_save)
+        save_group.add(save_btn)
+        content.add(save_group)
+
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(header)
+        toolbar.set_content(content)
+        self.set_content(toolbar)
+
+    def _on_toggle_service(self, btn):
+        if is_service_running():
+            stop_service()
+            btn.set_label("Start")
+            btn.remove_css_class("destructive-action")
+            btn.add_css_class("suggested-action")
+            self._status_row.set_subtitle("Stopped")
+        else:
+            enable_and_start_service()
+            btn.set_label("Stop")
+            btn.remove_css_class("suggested-action")
+            btn.add_css_class("destructive-action")
+            self._status_row.set_subtitle("Running")
+
+    def _on_autostart_toggled(self, row, _param):
+        cmd = "enable" if row.get_active() else "disable"
+        subprocess.run(
+            ["systemctl", "--user", cmd, SERVICE_NAME],
+            capture_output=True, timeout=5,
+        )
+
+    def _on_view_logs(self, _row):
+        subprocess.Popen(
+            ["gnome-terminal", "--", "journalctl", "--user", "-u", SERVICE_NAME, "-f"],
+        )
+
+    def _on_save(self, _btn):
+        config = load_config()
+        config["input_bucket_seconds"] = int(self._bucket_row.get_value())
+        config["window_poll_seconds"] = round(self._window_row.get_value(), 1)
+        config["mic_poll_seconds"] = round(self._mic_row.get_value(), 1)
+        config["score_window_seconds"] = int(self._score_row.get_value())
+        save_config(config)
+
+        if is_service_running():
+            restart_service()
+
+        dialog = Adw.AlertDialog(
+            heading="Settings Saved",
+            body="Configuration saved and service restarted.",
+        )
+        dialog.add_response("ok", "OK")
+        dialog.present(self)
+
+
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+
+class AisisstantApp(Adw.Application):
+    def __init__(self, first_run=False):
+        super().__init__(
+            application_id=APP_ID,
+            flags=Gio.ApplicationFlags.NON_UNIQUE,
+        )
+        self._first_run = first_run
+
+    def do_activate(self):
+        from gi.repository import Gdk
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_string(SPLASH_CSS)
+        display = Gdk.Display.get_default()
+        if display:
+            Gtk.StyleContext.add_provider_for_display(
+                display, css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+        try:
+            if self._first_run:
+                if is_service_running():
+                    self._show_already_installed()
+                    return
+                win = SetupWizard(self, on_finish=self._on_wizard_done, show_splash=True)
+            else:
+                win = SettingsWindow(self)
+            win.present()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    def _show_already_installed(self):
+        win = Adw.ApplicationWindow(
+            application=self,
+            title=APP_NAME,
+            default_width=450, default_height=250,
+        )
+        win.present()
+
+        dialog = Adw.AlertDialog(
+            heading="Aisisstant is already running",
+            body="The tracker is already configured. What would you like to do?",
+        )
+        dialog.add_response("quit", "Quit")
+        dialog.add_response("settings", "Open Settings")
+        dialog.set_response_appearance("settings", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("settings")
+        dialog.connect("response", self._on_already_response, win)
+        dialog.present(win)
+
+    def _on_already_response(self, dialog, response, win):
+        win.close()
+        if response == "settings":
+            settings = SettingsWindow(self)
+            settings.present()
+            return
+        self.quit()
+
+    def _on_wizard_done(self):
+        win = SettingsWindow(self)
+        win.present()
+
+
+def main():
+    first_run = "--first-run" in sys.argv
+    app = AisisstantApp(first_run=first_run)
+    app.run([] if first_run else sys.argv)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,32 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        # Update desktop database
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications 2>/dev/null || true
+        fi
+
+        echo ""
+        echo "============================================="
+        echo "  Aisisstant installed successfully!"
+        echo ""
+        echo "  Launch 'Aisisstant Settings' from your"
+        echo "  application menu to complete setup."
+        echo "============================================="
+        echo ""
+
+        # Launch setup wizard for the installing user
+        if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+            REAL_USER="${SUDO_USER:-$USER}"
+            if [ "$REAL_USER" != "root" ] && [ -n "$REAL_USER" ]; then
+                su - "$REAL_USER" -c "nohup /usr/bin/aisisstant-setup --first-run >/dev/null 2>&1 &" || true
+            fi
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -5,7 +5,17 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.pybuild/
 .env
 .env.prod
 .env.cloudflare
 .claude/
+
+# Debian build artifacts
+debian/aisisstant/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.debhelper
+debian/*.debhelper.log
+debian/*.substvars

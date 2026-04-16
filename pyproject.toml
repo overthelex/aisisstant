@@ -9,8 +9,18 @@ dependencies = [
     "pydbus>=0.6.0",
 ]
 
+[project.scripts]
+aisisstant = "aisisstant.main:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",
     "pytest-asyncio>=1.0",
 ]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["aisisstant*"]

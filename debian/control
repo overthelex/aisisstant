@@ -1,0 +1,41 @@
+Source: aisisstant
+Section: utils
+Priority: optional
+Maintainer: Vovkes <shepherdvovkes@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               pybuild-plugin-pyproject,
+               python3-all,
+               python3-setuptools,
+               python3-wheel
+Standards-Version: 4.6.2
+Homepage: https://github.com/overthelex/aisisstant
+
+Package: aisisstant
+Architecture: all
+Depends: ${python3:Depends},
+         ${misc:Depends},
+         python3 (>= 3.12),
+         python3-evdev (>= 1.7),
+         python3-gi,
+         python3-gi-cairo,
+         gir1.2-gtk-4.0,
+         gir1.2-adw-1,
+         gir1.2-atspi-2.0,
+         gnome-shell (>= 46),
+         docker-compose-v2 | docker-compose,
+         xdotool
+Recommends: gnome-shell-extension-prefs,
+            python3-asyncpg
+Description: Activity tracker agent for Ubuntu/GNOME
+ Aisisstant tracks user activity across all applications and scores
+ active vs passive vs idle time. Data is stored in PostgreSQL.
+ .
+ Features:
+  - Keyboard input tracking (key count, not content) via evdev
+  - Mouse tracking (distance, clicks, scroll) via evdev
+  - Window focus tracking (app, tab title, duration) via AT-SPI
+  - Microphone activity detection via PipeWire
+  - Activity scoring algorithm (active/passive/idle per 30s)
+  - PostgreSQL storage in Docker container
+  - GTK4/Adwaita setup wizard and settings UI
