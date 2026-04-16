@@ -15,9 +15,15 @@ _SPINNER_RE = re.compile(r"^[\u2800-\u28FF✳✴⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏�
 # Leading notification count like "(3) " or "[5] "
 _NOTIF_COUNT_RE = re.compile(r"^\(\d+\)\s*|^\[\d+\]\s*")
 
-# Browser suffixes: " - Google Chrome - Profile", " — Mozilla Firefox", " - Brave", etc.
-_BROWSER_SUFFIX_RE = re.compile(
-    r"\s*[-–—]\s*(?:Google Chrome|Mozilla Firefox|Firefox|Brave|Chromium|Microsoft Edge)"
+# App suffixes: browsers, mail clients, media players, etc.
+_APP_SUFFIX_RE = re.compile(
+    r"\s*[-–—]\s*(?:"
+    r"Google Chrome|Mozilla Firefox|Firefox|Brave|Chromium|Microsoft Edge"
+    r"|Mozilla Thunderbird|Thunderbird"
+    r"|LibreOffice Writer|LibreOffice Calc|LibreOffice Impress|LibreOffice"
+    r"|VLC media player"
+    r"|Telegram"
+    r")"
     r"(?:\s*[-–—]\s*.+)?$"
 )
 
@@ -243,7 +249,7 @@ class WindowCollector(BaseCollector):
         t = _SPINNER_RE.sub("", title)
         t = _NOTIF_COUNT_RE.sub("", t)
         t = _MEDIA_STATE_RE.sub("", t)
-        t = _BROWSER_SUFFIX_RE.sub("", t)
+        t = _APP_SUFFIX_RE.sub("", t)
         return t.strip()
 
     async def _handle_window(self, info: WindowInfo) -> None:

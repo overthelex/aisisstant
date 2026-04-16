@@ -81,6 +81,39 @@ class TestNormalizeTitle:
             "YouTube Music - Paused - Google Chrome - user"
         ) == "YouTube Music"
 
+    # --- Thunderbird ---
+    def test_strips_thunderbird_suffix(self):
+        assert WindowCollector._normalize_title(
+            "Inbox - user@mail.com - Mozilla Thunderbird"
+        ) == "Inbox - user@mail.com"
+
+    def test_strips_thunderbird_short_suffix(self):
+        assert WindowCollector._normalize_title(
+            "Sent - user@mail.com - Thunderbird"
+        ) == "Sent - user@mail.com"
+
+    def test_thunderbird_email_subject(self):
+        assert WindowCollector._normalize_title(
+            "Re: Meeting tomorrow - Mozilla Thunderbird"
+        ) == "Re: Meeting tomorrow"
+
+    # --- LibreOffice ---
+    def test_strips_libreoffice_writer(self):
+        assert WindowCollector._normalize_title(
+            "Document.odt - LibreOffice Writer"
+        ) == "Document.odt"
+
+    def test_strips_libreoffice_calc(self):
+        assert WindowCollector._normalize_title(
+            "Budget.xlsx - LibreOffice Calc"
+        ) == "Budget.xlsx"
+
+    # --- VLC ---
+    def test_strips_vlc_suffix(self):
+        assert WindowCollector._normalize_title(
+            "Movie.mkv - VLC media player"
+        ) == "Movie.mkv"
+
     # --- Combined ---
     def test_count_plus_chrome_suffix(self):
         assert WindowCollector._normalize_title(
@@ -88,11 +121,7 @@ class TestNormalizeTitle:
         ) == "Facebook"
 
     # --- Preserved ---
-    def test_preserves_vlc_title(self):
-        title = "Movie.mkv - VLC media player"
-        assert WindowCollector._normalize_title(title) == title
-
-    def test_preserves_transmission(self):
+    def test_preserves_plain_title(self):
         assert WindowCollector._normalize_title("Transmission") == "Transmission"
 
     def test_preserves_empty_string(self):
