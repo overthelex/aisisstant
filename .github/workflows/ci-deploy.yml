@@ -86,17 +86,50 @@ jobs:
             TAG="${DATE_TAG}.${EXISTING}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "deb_version=${TAG}-1" >> "$GITHUB_OUTPUT"
           echo "Generated tag: $TAG"
+
+      - name: Sync version files to tag
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          DEB_VERSION="${{ steps.tag.outputs.deb_version }}"
+
+          # pyproject.toml
+          sed -i -E "s/^version = \".*\"/version = \"${TAG}\"/" pyproject.toml
+
+          # aisisstant-setup VERSION constant
+          sed -i -E "s/^VERSION = \".*\"/VERSION = \"${TAG}\"/" aisisstant-setup
+
+          # debian/changelog — prepend new entry
+          DATE_RFC=$(date -R)
+          cat > debian/changelog.new <<EOF
+          aisisstant (${DEB_VERSION}) unstable; urgency=medium
+
+            * Automated release from master @ ${GITHUB_SHA::7}
+
+           -- CI <ci@aisisstant.local>  ${DATE_RFC}
+
+          EOF
+          cat debian/changelog >> debian/changelog.new
+          mv debian/changelog.new debian/changelog
+
+      - name: Build .deb
+        run: |
+          dpkg-buildpackage -us -uc -b
+          mkdir -p dist
+          mv ../aisisstant_*.deb ../aisisstant_*.buildinfo ../aisisstant_*.changes dist/ || true
+          ls -la dist/
 
       - name: Create git tag
         run: |
           git tag ${{ steps.tag.outputs.tag }}
           git push origin ${{ steps.tag.outputs.tag }}
 
-      - name: Create GitHub release
+      - name: Create GitHub release with .deb
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create ${{ steps.tag.outputs.tag }} \
             --title "${{ steps.tag.outputs.tag }}" \
-            --generate-notes
+            --generate-notes \
+            dist/aisisstant_*.deb
