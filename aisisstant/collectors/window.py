@@ -31,11 +31,46 @@ class WindowCollector(BaseCollector):
             await asyncio.sleep(self.poll_seconds)
 
     async def _get_active_window(self) -> WindowInfo:
-        """Try DBus extension first, fall back to xdotool."""
+        """Try aisisstant extension, then switchamba, then xdotool."""
         info = await self._try_dbus()
         if info is not None:
             return info
+        info = await self._try_switchamba()
+        if info is not None:
+            return info
         return await self._try_xdotool()
+
+    async def _try_switchamba(self) -> WindowInfo | None:
+        """Fallback: use existing switchamba extension (wm_class only)."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.gnome.Shell",
+                "--object-path",
+                "/com/switchamba/WindowInfo",
+                "--method",
+                "com.switchamba.WindowInfo.GetFocusedApp",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+            if proc.returncode != 0:
+                return None
+            raw = stdout.decode().strip()
+            # Output: ('gnome-terminal-server',)
+            start = raw.find("'") + 1
+            end = raw.rfind("'")
+            if start <= 0 or end <= start:
+                return None
+            wm_class = raw[start:end]
+            if wm_class:
+                return WindowInfo(wm_class=wm_class)
+            return None
+        except Exception:
+            return None
 
     async def _try_dbus(self) -> WindowInfo | None:
         try:
