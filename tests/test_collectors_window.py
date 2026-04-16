@@ -6,8 +6,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aisisstant.collectors.window import WindowCollector
+from aisisstant.collectors.window import WindowCollector, _SPINNER_RE
 from aisisstant.models import WindowInfo, WindowSession
+
+
+class TestNormalizeTitle:
+    def test_strips_braille_spinner(self):
+        assert WindowCollector._normalize_title("⠐ my-project") == "my-project"
+
+    def test_strips_star_spinner(self):
+        assert WindowCollector._normalize_title("✳ Claude Code") == "Claude Code"
+
+    def test_strips_multiple_braille(self):
+        assert WindowCollector._normalize_title("⠹⠸ building") == "building"
+
+    def test_preserves_normal_title(self):
+        assert WindowCollector._normalize_title("GitHub - Chrome") == "GitHub - Chrome"
+
+    def test_preserves_empty_string(self):
+        assert WindowCollector._normalize_title("") == ""
+
+    def test_different_spinners_normalize_same(self):
+        t1 = WindowCollector._normalize_title("⠐ activity-tracker")
+        t2 = WindowCollector._normalize_title("⠂ activity-tracker")
+        t3 = WindowCollector._normalize_title("✳ activity-tracker")
+        assert t1 == t2 == t3 == "activity-tracker"
 
 
 class TestWindowCollectorTryDbus:
@@ -133,11 +156,26 @@ class TestWindowCollectorTryXdotool:
 
 class TestWindowCollectorGetActiveWindow:
     @pytest.mark.asyncio
-    async def test_prefers_dbus_over_xdotool(self, mock_writer):
+    async def test_prefers_atspi_over_dbus(self, mock_writer):
         wc = WindowCollector(mock_writer)
-        dbus_info = WindowInfo(wm_class="from_dbus", title="DBus", pid=1)
+        wc._atspi_inited = True
+        atspi_info = WindowInfo(wm_class="from_atspi", title="AT-SPI", pid=1)
 
-        with patch.object(wc, "_try_dbus", return_value=dbus_info) as mock_dbus, \
+        with patch("aisisstant.collectors.window._get_active_window_atspi", return_value=atspi_info), \
+             patch.object(wc, "_try_dbus") as mock_dbus:
+            result = await wc._get_active_window()
+
+        assert result.wm_class == "from_atspi"
+        mock_dbus.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_dbus_when_atspi_fails(self, mock_writer):
+        wc = WindowCollector(mock_writer)
+        wc._atspi_inited = True
+        dbus_info = WindowInfo(wm_class="from_dbus", title="DBus", pid=2)
+
+        with patch("aisisstant.collectors.window._get_active_window_atspi", return_value=None), \
+             patch.object(wc, "_try_dbus", return_value=dbus_info) as mock_dbus, \
              patch.object(wc, "_try_xdotool") as mock_xdotool:
             result = await wc._get_active_window()
 
@@ -145,11 +183,29 @@ class TestWindowCollectorGetActiveWindow:
         mock_xdotool.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_falls_back_to_switchamba(self, mock_writer):
+        wc = WindowCollector(mock_writer)
+        wc._atspi_inited = True
+        switchamba_info = WindowInfo(wm_class="from_switchamba")
+
+        with patch("aisisstant.collectors.window._get_active_window_atspi", return_value=None), \
+             patch.object(wc, "_try_dbus", return_value=None), \
+             patch.object(wc, "_try_switchamba", return_value=switchamba_info), \
+             patch.object(wc, "_try_xdotool") as mock_xdotool:
+            result = await wc._get_active_window()
+
+        assert result.wm_class == "from_switchamba"
+        mock_xdotool.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_xdotool(self, mock_writer):
         wc = WindowCollector(mock_writer)
-        xdotool_info = WindowInfo(wm_class="from_xdotool", title="X", pid=2)
+        wc._atspi_inited = True
+        xdotool_info = WindowInfo(wm_class="from_xdotool", title="X", pid=3)
 
-        with patch.object(wc, "_try_dbus", return_value=None), \
+        with patch("aisisstant.collectors.window._get_active_window_atspi", return_value=None), \
+             patch.object(wc, "_try_dbus", return_value=None), \
+             patch.object(wc, "_try_switchamba", return_value=None), \
              patch.object(wc, "_try_xdotool", return_value=xdotool_info):
             result = await wc._get_active_window()
 
@@ -224,3 +280,27 @@ class TestWindowCollectorHandleWindow:
         assert calls[0][0] == "window_session_close"
         assert calls[1][0] == "window_sessions"
         assert calls[1][1].window_title == "Tab 2"
+
+    @pytest.mark.asyncio
+    async def test_spinner_change_does_not_create_new_session(self, mock_writer):
+        wc = WindowCollector(mock_writer)
+
+        await wc._handle_window(WindowInfo(wm_class="terminal", title="⠐ my-project", pid=1))
+        mock_writer.put.reset_mock()
+
+        # Spinner changes but project name stays the same
+        await wc._handle_window(WindowInfo(wm_class="terminal", title="⠂ my-project", pid=1))
+        mock_writer.put.assert_not_called()
+
+        await wc._handle_window(WindowInfo(wm_class="terminal", title="✳ my-project", pid=1))
+        mock_writer.put.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_real_title_change_creates_new_session(self, mock_writer):
+        wc = WindowCollector(mock_writer)
+
+        await wc._handle_window(WindowInfo(wm_class="terminal", title="⠐ project-a", pid=1))
+        mock_writer.put.reset_mock()
+
+        await wc._handle_window(WindowInfo(wm_class="terminal", title="⠐ project-b", pid=1))
+        assert mock_writer.put.call_count == 2  # close + open

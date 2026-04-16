@@ -2,14 +2,54 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from typing import TYPE_CHECKING
+
+import re
 
 from ..models import WindowInfo, WindowSession, _now
 from .base import BaseCollector
 
+# Braille spinner chars and other animated prefixes that change rapidly
+_SPINNER_RE = re.compile(r"^[\u2800-\u28FF✳✴⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒⣾⣽⣻⢿⡿⣟⣯⣷]+\s*")
+
 if TYPE_CHECKING:
     from ..db import BatchWriter
+
+
+def _get_active_window_atspi() -> WindowInfo | None:
+    """Get active window via AT-SPI accessibility (works on Wayland natively)."""
+    try:
+        import gi
+
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi
+
+        desktop = Atspi.get_desktop(0)
+        for i in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(i)
+            if app is None:
+                continue
+            app_name = app.get_name() or ""
+            for j in range(app.get_child_count()):
+                win = app.get_child_at_index(j)
+                if win is None:
+                    continue
+                role = win.get_role_name()
+                if role != "frame":
+                    continue
+                state = win.get_state_set()
+                if not state.contains(Atspi.StateType.ACTIVE):
+                    continue
+                title = win.get_name() or ""
+                pid = 0
+                try:
+                    pid = win.get_process_id()
+                except Exception:
+                    pass
+                return WindowInfo(wm_class=app_name, title=title, pid=pid)
+    except Exception:
+        pass
+    return None
 
 
 class WindowCollector(BaseCollector):
@@ -19,6 +59,7 @@ class WindowCollector(BaseCollector):
         super().__init__(writer)
         self.poll_seconds = poll_seconds
         self._current_session: WindowSession | None = None
+        self._atspi_inited = False
 
     async def run(self) -> None:
         self.log.info("Window collector started (poll every %.1fs)", self.poll_seconds)
@@ -31,7 +72,27 @@ class WindowCollector(BaseCollector):
             await asyncio.sleep(self.poll_seconds)
 
     async def _get_active_window(self) -> WindowInfo:
-        """Try aisisstant extension, then switchamba, then xdotool."""
+        """Try AT-SPI first (full info), then DBus extensions, then xdotool."""
+        # AT-SPI is synchronous, run in executor to not block event loop
+        if not self._atspi_inited:
+            try:
+                import gi
+
+                gi.require_version("Atspi", "2.0")
+                from gi.repository import Atspi
+
+                Atspi.init()
+                self._atspi_inited = True
+                self.log.info("AT-SPI initialized for window tracking")
+            except Exception:
+                self.log.warning("AT-SPI not available, falling back to DBus")
+
+        if self._atspi_inited:
+            loop = asyncio.get_running_loop()
+            info = await loop.run_in_executor(None, _get_active_window_atspi)
+            if info is not None and info.wm_class:
+                return info
+
         info = await self._try_dbus()
         if info is not None:
             return info
@@ -60,7 +121,6 @@ class WindowCollector(BaseCollector):
             if proc.returncode != 0:
                 return None
             raw = stdout.decode().strip()
-            # Output: ('gnome-terminal-server',)
             start = raw.find("'") + 1
             end = raw.rfind("'")
             if start <= 0 or end <= start:
@@ -90,15 +150,12 @@ class WindowCollector(BaseCollector):
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
             if proc.returncode != 0:
                 return None
-            # gdbus output looks like: ('{"wm_class":"...","title":"...","pid":123}',)
             raw = stdout.decode().strip()
-            # Extract JSON string between first pair of quotes
             start = raw.find("'") + 1
             end = raw.rfind("'")
             if start <= 0 or end <= start:
                 return None
             json_str = raw[start:end]
-            # Unescape gdbus quoting
             json_str = json_str.replace("\\'", "'")
             data = json.loads(json_str)
             return WindowInfo(
@@ -126,7 +183,6 @@ class WindowCollector(BaseCollector):
             if not wid:
                 return info
 
-            # Get wm_class
             proc2 = await asyncio.create_subprocess_exec(
                 "xdotool",
                 "getactivewindow",
@@ -138,7 +194,6 @@ class WindowCollector(BaseCollector):
             if proc2.returncode == 0:
                 info.wm_class = stdout2.decode().strip()
 
-            # Get title
             proc3 = await asyncio.create_subprocess_exec(
                 "xdotool",
                 "getactivewindow",
@@ -150,7 +205,6 @@ class WindowCollector(BaseCollector):
             if proc3.returncode == 0:
                 info.title = stdout3.decode().strip()
 
-            # Get PID
             proc4 = await asyncio.create_subprocess_exec(
                 "xdotool",
                 "getactivewindow",
@@ -167,11 +221,27 @@ class WindowCollector(BaseCollector):
             pass
         return info
 
+    @staticmethod
+    def _normalize_title(title: str) -> str:
+        """Strip spinner/animation prefixes so rapid updates don't create new sessions."""
+        return _SPINNER_RE.sub("", title).strip()
+
     async def _handle_window(self, info: WindowInfo) -> None:
         if not info.wm_class:
             return
 
-        if self._current_session is None or self._current_session.wm_class != info.wm_class or self._current_session.window_title != info.title:
+        norm_title = self._normalize_title(info.title)
+        current_norm = (
+            self._normalize_title(self._current_session.window_title)
+            if self._current_session
+            else ""
+        )
+
+        if (
+            self._current_session is None
+            or self._current_session.wm_class != info.wm_class
+            or norm_title != current_norm
+        ):
             # Close previous session
             if self._current_session is not None:
                 now = _now()
