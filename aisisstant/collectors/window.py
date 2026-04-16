@@ -12,6 +12,18 @@ from .base import BaseCollector
 # Braille spinner chars and other animated prefixes that change rapidly
 _SPINNER_RE = re.compile(r"^[\u2800-\u28FF✳✴⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒⣾⣽⣻⢿⡿⣟⣯⣷]+\s*")
 
+# Leading notification count like "(3) " or "[5] "
+_NOTIF_COUNT_RE = re.compile(r"^\(\d+\)\s*|^\[\d+\]\s*")
+
+# Browser suffixes: " - Google Chrome - Profile", " — Mozilla Firefox", " - Brave", etc.
+_BROWSER_SUFFIX_RE = re.compile(
+    r"\s*[-–—]\s*(?:Google Chrome|Mozilla Firefox|Firefox|Brave|Chromium|Microsoft Edge)"
+    r"(?:\s*[-–—]\s*.+)?$"
+)
+
+# YouTube Music / Spotify "Audio playing" / "Paused" state markers
+_MEDIA_STATE_RE = re.compile(r"\s*[-–—]\s*(?:Audio playing|Paused)\s*(?=\s*[-–—]|$)")
+
 if TYPE_CHECKING:
     from ..db import BatchWriter
 
@@ -223,8 +235,16 @@ class WindowCollector(BaseCollector):
 
     @staticmethod
     def _normalize_title(title: str) -> str:
-        """Strip spinner/animation prefixes so rapid updates don't create new sessions."""
-        return _SPINNER_RE.sub("", title).strip()
+        """Normalize title to avoid duplicate sessions from cosmetic changes.
+
+        Strips: spinner prefixes, notification counts, browser suffixes,
+        media playback state markers.
+        """
+        t = _SPINNER_RE.sub("", title)
+        t = _NOTIF_COUNT_RE.sub("", t)
+        t = _MEDIA_STATE_RE.sub("", t)
+        t = _BROWSER_SUFFIX_RE.sub("", t)
+        return t.strip()
 
     async def _handle_window(self, info: WindowInfo) -> None:
         if not info.wm_class:

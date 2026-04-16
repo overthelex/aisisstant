@@ -11,6 +11,7 @@ from aisisstant.models import WindowInfo, WindowSession
 
 
 class TestNormalizeTitle:
+    # --- Spinner ---
     def test_strips_braille_spinner(self):
         assert WindowCollector._normalize_title("⠐ my-project") == "my-project"
 
@@ -20,17 +21,87 @@ class TestNormalizeTitle:
     def test_strips_multiple_braille(self):
         assert WindowCollector._normalize_title("⠹⠸ building") == "building"
 
-    def test_preserves_normal_title(self):
-        assert WindowCollector._normalize_title("GitHub - Chrome") == "GitHub - Chrome"
-
-    def test_preserves_empty_string(self):
-        assert WindowCollector._normalize_title("") == ""
-
     def test_different_spinners_normalize_same(self):
         t1 = WindowCollector._normalize_title("⠐ activity-tracker")
         t2 = WindowCollector._normalize_title("⠂ activity-tracker")
         t3 = WindowCollector._normalize_title("✳ activity-tracker")
         assert t1 == t2 == t3 == "activity-tracker"
+
+    # --- Notification counts ---
+    def test_strips_parenthesized_count(self):
+        assert WindowCollector._normalize_title("(3) Inbox - Gmail") == "Inbox - Gmail"
+
+    def test_strips_bracketed_count(self):
+        assert WindowCollector._normalize_title("[2] WhatsApp") == "WhatsApp"
+
+    def test_different_counts_normalize_same(self):
+        t1 = WindowCollector._normalize_title("(1) Inbox - Gmail")
+        t2 = WindowCollector._normalize_title("(99) Inbox - Gmail")
+        assert t1 == t2
+
+    # --- Browser suffixes ---
+    def test_strips_chrome_suffix(self):
+        assert WindowCollector._normalize_title(
+            "GitHub - Google Chrome - Vladimir"
+        ) == "GitHub"
+
+    def test_strips_chrome_suffix_no_profile(self):
+        assert WindowCollector._normalize_title(
+            "GitHub - Google Chrome"
+        ) == "GitHub"
+
+    def test_strips_firefox_suffix(self):
+        assert WindowCollector._normalize_title(
+            "Stack Overflow — Mozilla Firefox"
+        ) == "Stack Overflow"
+
+    def test_strips_firefox_short_suffix(self):
+        assert WindowCollector._normalize_title(
+            "Docs - Firefox"
+        ) == "Docs"
+
+    def test_strips_edge_suffix(self):
+        assert WindowCollector._normalize_title(
+            "Outlook - Microsoft Edge"
+        ) == "Outlook"
+
+    def test_strips_brave_suffix(self):
+        assert WindowCollector._normalize_title(
+            "Reddit - Brave"
+        ) == "Reddit"
+
+    # --- Media state ---
+    def test_strips_audio_playing(self):
+        assert WindowCollector._normalize_title(
+            "Song | YouTube Music - Audio playing - Google Chrome - user"
+        ) == "Song | YouTube Music"
+
+    def test_strips_paused(self):
+        assert WindowCollector._normalize_title(
+            "YouTube Music - Paused - Google Chrome - user"
+        ) == "YouTube Music"
+
+    # --- Combined ---
+    def test_count_plus_chrome_suffix(self):
+        assert WindowCollector._normalize_title(
+            "(17) Facebook - Google Chrome - Profile 2"
+        ) == "Facebook"
+
+    # --- Preserved ---
+    def test_preserves_vlc_title(self):
+        title = "Movie.mkv - VLC media player"
+        assert WindowCollector._normalize_title(title) == title
+
+    def test_preserves_transmission(self):
+        assert WindowCollector._normalize_title("Transmission") == "Transmission"
+
+    def test_preserves_empty_string(self):
+        assert WindowCollector._normalize_title("") == ""
+
+    def test_preserves_slack_content(self):
+        assert WindowCollector._normalize_title(
+            "Slack | general | Workspace - Google Chrome - Work"
+        ) == "Slack | general | Workspace"
 
 
 class TestWindowCollectorTryDbus:
