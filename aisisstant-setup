@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aisisstant Setup Wizard & Settings UI.
+"""Xsistant Setup Wizard & Settings UI.
 
 GTK4/Adwaita application for initial setup and configuration management.
 Launched automatically after package installation or from the app menu.
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
-APP_NAME = "Aisisstant"
+APP_NAME = "Xsistant"
 APP_ID = "com.aisisstant.Setup"
 SERVICE_NAME = "aisisstant.service"
 EXTENSION_UUID = "aisisstant-tracker@vovkes"
@@ -27,6 +27,19 @@ VERSION = "2026.04.16"
 
 CONFIG_DIR = Path.home() / ".config" / "aisisstant"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def _find_logo(variant: str = "logo-mark-light.svg") -> str | None:
+    """Locate a branding asset across dev and installed paths."""
+    candidates = [
+        Path(__file__).parent / "branding" / variant,
+        Path("/usr/share/aisisstant/branding") / variant,
+        Path.home() / "aisisstant" / "branding" / variant,
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -313,15 +326,26 @@ def _build_splash_content(with_next_btn=False, on_next=None):
         valign=Gtk.Align.CENTER,
         margin_start=40,
         margin_end=40,
+        margin_top=56,
+        margin_bottom=56,
     )
 
-    # Icon
-    icon = Gtk.Label(label="\U0001f441")  # eye emoji
-    icon.add_css_class("splash-icon")
-    icon.set_margin_bottom(8)
-    content.append(icon)
+    # Logo mark (light variant for dark splash bg). Fallback to emoji if missing.
+    logo_path = _find_logo("logo-mark-light.svg")
+    if logo_path:
+        logo = Gtk.Picture.new_for_filename(logo_path)
+        logo.set_can_shrink(False)
+        logo.set_content_fit(Gtk.ContentFit.CONTAIN)
+        logo.set_size_request(96, 96)
+        logo.set_margin_bottom(12)
+        content.append(logo)
+    else:
+        icon = Gtk.Label(label="\U0001f441")
+        icon.add_css_class("splash-icon")
+        icon.set_margin_bottom(8)
+        content.append(icon)
 
-    title = Gtk.Label(label="AISISSTANT")
+    title = Gtk.Label(label="XSISTANT")
     title.add_css_class("splash-title")
     content.append(title)
 
@@ -418,7 +442,7 @@ class SetupWizard(Adw.ApplicationWindow):
     def __init__(self, app, on_finish=None, show_splash=False):
         super().__init__(
             application=app,
-            title="Aisisstant Setup",
+            title="Xsistant Setup",
             default_width=600,
             default_height=620,
             resizable=False,
@@ -448,9 +472,10 @@ class SetupWizard(Adw.ApplicationWindow):
         # --- Page 1: Welcome + Install ---
         welcome = self._make_page(
             icon_name="utilities-system-monitor-symbolic",
-            title="Welcome to Aisisstant",
+            icon_file=_find_logo("logo-mark.svg"),
+            title="Welcome to Xsistant",
             description=(
-                "Aisisstant tracks your activity across all applications \u2014 "
+                "Xsistant tracks your activity across all applications \u2014 "
                 "keyboard, mouse, window focus, microphone \u2014 and scores "
                 "active vs passive vs idle time.\n\n"
                 "Press Install to set up everything automatically."
@@ -480,7 +505,7 @@ class SetupWizard(Adw.ApplicationWindow):
         # --- Page 2: Input Group ---
         in_group = is_in_input_group()
         group_desc = (
-            "Aisisstant needs access to keyboard and mouse input devices.\n"
+            "Xsistant needs access to keyboard and mouse input devices.\n"
             "Your user must be in the 'input' system group."
         )
         if in_group:
@@ -538,7 +563,7 @@ class SetupWizard(Adw.ApplicationWindow):
         # --- Page 4: Database ---
         db_running = is_docker_running()
         db_desc = (
-            "Aisisstant stores all activity data in PostgreSQL running in Docker.\n"
+            "Xsistant stores all activity data in PostgreSQL running in Docker.\n"
             "The database is bound to localhost only (127.0.0.1:5438)."
         )
         if db_running:
@@ -566,7 +591,7 @@ class SetupWizard(Adw.ApplicationWindow):
         # --- Page 5: Start Service ---
         start_page = self._make_page(
             icon_name="media-playback-start-symbolic",
-            title="Start Aisisstant",
+            title="Start Xsistant",
             description=(
                 "Everything is configured. Start the activity tracker now?\n\n"
                 "The service will start automatically on login."
@@ -620,7 +645,7 @@ class SetupWizard(Adw.ApplicationWindow):
         self.set_content(main_box)
         self._update_nav()
 
-    def _make_page(self, icon_name, title, description):
+    def _make_page(self, icon_name, title, description, icon_file=None):
         box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
             spacing=16,
@@ -628,9 +653,15 @@ class SetupWizard(Adw.ApplicationWindow):
             margin_start=24, margin_end=24,
             vexpand=True,
         )
-        icon = Gtk.Image.new_from_icon_name(icon_name)
-        icon.set_pixel_size(64)
-        icon.add_css_class("dim-label")
+        if icon_file:
+            icon = Gtk.Picture.new_for_filename(icon_file)
+            icon.set_can_shrink(False)
+            icon.set_content_fit(Gtk.ContentFit.CONTAIN)
+            icon.set_size_request(72, 72)
+        else:
+            icon = Gtk.Image.new_from_icon_name(icon_name)
+            icon.set_pixel_size(64)
+            icon.add_css_class("dim-label")
         box.append(icon)
 
         lbl = Gtk.Label(label=title)
@@ -807,7 +838,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(
             application=app,
-            title="Aisisstant Settings",
+            title="Xsistant Settings",
             default_width=550,
             default_height=650,
         )
@@ -825,7 +856,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         svc_group = Adw.PreferencesGroup(title="Service")
 
         self._status_row = Adw.ActionRow(
-            title="Aisisstant Tracker",
+            title="Xsistant Tracker",
             subtitle="Running" if running else "Stopped",
         )
         status_icon = Gtk.Image.new_from_icon_name(
@@ -1006,13 +1037,14 @@ class SettingsWindow(Adw.ApplicationWindow):
 # Application
 # ---------------------------------------------------------------------------
 
-class AisisstantApp(Adw.Application):
-    def __init__(self, first_run=False):
+class XsistantApp(Adw.Application):
+    def __init__(self, first_run=False, force_wizard=False):
         super().__init__(
             application_id=APP_ID,
             flags=Gio.ApplicationFlags.NON_UNIQUE,
         )
         self._first_run = first_run
+        self._force_wizard = force_wizard
 
     def do_activate(self):
         from gi.repository import Gdk
@@ -1025,7 +1057,9 @@ class AisisstantApp(Adw.Application):
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
             )
         try:
-            if self._first_run:
+            if self._force_wizard:
+                win = SetupWizard(self, on_finish=self._on_wizard_done, show_splash=True)
+            elif self._first_run:
                 if is_service_running():
                     self._show_already_installed()
                     return
@@ -1046,7 +1080,7 @@ class AisisstantApp(Adw.Application):
         win.present()
 
         dialog = Adw.AlertDialog(
-            heading="Aisisstant is already running",
+            heading="Xsistant is already running",
             body="The tracker is already configured. What would you like to do?",
         )
         dialog.add_response("quit", "Quit")
@@ -1071,8 +1105,9 @@ class AisisstantApp(Adw.Application):
 
 def main():
     first_run = "--first-run" in sys.argv
-    app = AisisstantApp(first_run=first_run)
-    app.run([] if first_run else sys.argv)
+    force_wizard = "--wizard" in sys.argv
+    app = XsistantApp(first_run=first_run, force_wizard=force_wizard)
+    app.run([] if (first_run or force_wizard) else sys.argv)
 
 
 if __name__ == "__main__":

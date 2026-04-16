@@ -1,11 +1,11 @@
 [Desktop Entry]
-Name=Aisisstant Settings
+Name=Xsistant Settings
 GenericName=Activity Tracker
 Comment=Configure activity tracking (keyboard, mouse, windows, microphone)
 Exec=aisisstant-setup
-Icon=utilities-system-monitor
+Icon=/usr/share/aisisstant/branding/logo-mark.svg
 Terminal=false
 Type=Application
 Categories=Settings;System;Monitor;
-Keywords=activity;tracker;keyboard;mouse;window;productivity;
+Keywords=activity;tracker;keyboard;mouse;window;productivity;xsistant;
 StartupNotify=true

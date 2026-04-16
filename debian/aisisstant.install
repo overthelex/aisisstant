@@ -1,5 +1,9 @@
 aisisstant-setup usr/share/aisisstant/
 docker-compose.yml usr/share/aisisstant/
+branding/logo-mark.svg usr/share/aisisstant/branding/
+branding/logo-mark-light.svg usr/share/aisisstant/branding/
+branding/logo-mark-rounded.svg usr/share/aisisstant/branding/
+branding/logo-wordmark.svg usr/share/aisisstant/branding/
 gnome-extension/extension.js usr/share/gnome-shell/extensions/aisisstant-tracker@vovkes/
 gnome-extension/metadata.json usr/share/gnome-shell/extensions/aisisstant-tracker@vovkes/
 systemd/aisisstant.service usr/lib/systemd/user/
