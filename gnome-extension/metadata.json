@@ -1,0 +1,6 @@
+{
+  "name": "Aisisstant Window Tracker",
+  "description": "D-Bus API for tracking active window info (wm_class, title, pid)",
+  "uuid": "aisisstant-tracker@vovkes",
+  "shell-version": ["46"]
+}

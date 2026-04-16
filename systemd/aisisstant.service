@@ -1,0 +1,20 @@
+[Unit]
+Description=Aisisstant Activity Tracker
+After=graphical-session.target
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m aisisstant
+WorkingDirectory=/home/vovkes/aisisstant
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=DB_HOST=127.0.0.1
+Environment=DB_PORT=5438
+Environment=DB_NAME=aisisstant
+Environment=DB_USER=aisisstant
+Environment=DB_PASSWORD=aisisstant_dev
+
+[Install]
+WantedBy=graphical-session.target
