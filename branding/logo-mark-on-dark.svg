@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="aisisstant logo on dark tile">
+  <title>aisisstant</title>
+  <rect width="120" height="120" rx="24" fill="#1a1f35"/>
+  <g fill="#f5f6fa" transform="translate(10,10)">
+    <rect x="0"  y="0"  width="28" height="28"/>
+    <rect x="72" y="0"  width="28" height="28"/>
+    <rect x="36" y="36" width="28" height="28"/>
+    <rect x="0"  y="72" width="28" height="28"/>
+    <rect x="72" y="72" width="28" height="28"/>
+  </g>
+</svg>
