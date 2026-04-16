@@ -101,13 +101,15 @@ class ActivityScorer:
         self.score_window = score_window
         self._input_buckets: list[InputBucket] = []
         self._current_wm_class: str = ""
+        self._current_window_title: str = ""
         self._mic_active: bool = False
 
     def feed_input(self, bucket: InputBucket) -> None:
         self._input_buckets.append(bucket)
 
-    def set_window(self, wm_class: str) -> None:
+    def set_window(self, wm_class: str, window_title: str = "") -> None:
         self._current_wm_class = wm_class
+        self._current_window_title = window_title
 
     def set_mic(self, active: bool) -> None:
         self._mic_active = active
@@ -159,6 +161,7 @@ class ActivityScorer:
             window_start=window_start,
             window_end=now,
             wm_class=wm_class,
+            window_title=self._current_window_title,
             score=score,
             score_label=label,
             key_presses=total_keys,

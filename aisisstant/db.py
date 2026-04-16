@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS activity_scores (
     window_start   TIMESTAMPTZ NOT NULL,
     window_end     TIMESTAMPTZ NOT NULL,
     wm_class       TEXT NOT NULL,
+    window_title   TEXT NOT NULL DEFAULT '',
     score          REAL NOT NULL,
     score_label    TEXT NOT NULL,
     key_presses    INTEGER NOT NULL DEFAULT 0,
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS activity_scores (
     scroll         INTEGER NOT NULL DEFAULT 0,
     mic_active     BOOLEAN NOT NULL DEFAULT FALSE
 );
+ALTER TABLE activity_scores ADD COLUMN IF NOT EXISTS window_title TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_as_window ON activity_scores (window_start);
 CREATE INDEX IF NOT EXISTS idx_as_class ON activity_scores (wm_class, window_start);
 
@@ -213,14 +215,15 @@ class BatchWriter:
     ) -> None:
         await conn.executemany(
             """INSERT INTO activity_scores
-               (window_start, window_end, wm_class, score, score_label,
+               (window_start, window_end, wm_class, window_title, score, score_label,
                 key_presses, mouse_distance, clicks, scroll, mic_active)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
             [
                 (
                     r.window_start,
                     r.window_end,
                     r.wm_class,
+                    r.window_title,
                     r.score,
                     r.score_label,
                     r.key_presses,

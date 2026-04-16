@@ -76,6 +76,7 @@ class ActivityScore:
     clicks: int = 0
     scroll: int = 0
     mic_active: bool = False
+    window_title: str = ""
 
 
 @dataclass

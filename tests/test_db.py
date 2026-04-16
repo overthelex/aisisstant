@@ -287,10 +287,11 @@ class TestBatchWriterInsertMethods:
         await writer._insert_activity_scores(mock_conn, [score])
 
         params = mock_conn.executemany.call_args[0][1][0]
-        assert params[3] == 0.75
-        assert params[4] == "active"
-        assert params[5] == 100
-        assert params[9] is True
+        assert params[3] == ""
+        assert params[4] == 0.75
+        assert params[5] == "active"
+        assert params[6] == 100
+        assert params[10] is True
 
     @pytest.mark.asyncio
     async def test_insert_idle_events_params(self):
