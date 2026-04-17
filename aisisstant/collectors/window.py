@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import re
 
+from ..cwd import best_cwd_for_pid
 from ..models import WindowInfo, WindowSession, _now
 from .base import BaseCollector
 
@@ -109,15 +110,32 @@ class WindowCollector(BaseCollector):
             loop = asyncio.get_running_loop()
             info = await loop.run_in_executor(None, _get_active_window_atspi)
             if info is not None and info.wm_class:
+                await self._enrich_cwd(info)
                 return info
 
         info = await self._try_dbus()
         if info is not None:
+            await self._enrich_cwd(info)
             return info
         info = await self._try_switchamba()
         if info is not None:
             return info
-        return await self._try_xdotool()
+        info = await self._try_xdotool()
+        await self._enrich_cwd(info)
+        return info
+
+    async def _enrich_cwd(self, info: WindowInfo) -> None:
+        if not info or info.pid <= 0 or info.cwd:
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            cwd = await loop.run_in_executor(
+                None, best_cwd_for_pid, info.pid
+            )
+            if cwd:
+                info.cwd = cwd
+        except Exception:
+            self.log.exception("Failed to resolve cwd for pid %d", info.pid)
 
     async def _try_switchamba(self) -> WindowInfo | None:
         """Fallback: use existing switchamba extension (wm_class only)."""

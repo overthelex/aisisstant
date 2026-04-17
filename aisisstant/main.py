@@ -149,7 +149,9 @@ class Orchestrator:
                 info = await window._get_active_window()
                 await window._handle_window(info)
                 if info.wm_class:
-                    scorer.set_window(info.wm_class, info.title)
+                    scorer.set_window(
+                        info.wm_class, info.title, info.cwd
+                    )
             except Exception:
                 window.log.exception("Error polling window")
             await asyncio.sleep(window.poll_seconds)

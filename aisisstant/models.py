@@ -45,6 +45,7 @@ class WindowInfo:
     wm_class: str = ""
     title: str = ""
     pid: int = 0
+    cwd: str = ""
 
 
 @dataclass
@@ -77,6 +78,7 @@ class ActivityScore:
     scroll: int = 0
     mic_active: bool = False
     window_title: str = ""
+    cwd: str = ""
 
 
 @dataclass
