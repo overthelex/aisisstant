@@ -11,6 +11,7 @@ from .collectors.mouse import MouseCollector, find_mice
 from .collectors.window import WindowCollector
 from .collectors.microphone import MicrophoneCollector
 from .models import InputBucket, _now
+from .report import ReportSnapshotter
 from .scorer import ActivityScorer
 
 log = logging.getLogger("aisisstant")
@@ -36,6 +37,9 @@ class Orchestrator:
         mouse = MouseCollector(writer, bucket_seconds=self.config.input_bucket_seconds)
         window = WindowCollector(writer, poll_seconds=self.config.window_poll_seconds)
         mic = MicrophoneCollector(writer, poll_seconds=self.config.mic_poll_seconds)
+        snapshotter = ReportSnapshotter(
+            pool, interval_seconds=self.config.report_snapshot_seconds
+        )
 
         tasks = [
             asyncio.create_task(writer.run(), name="writer"),
@@ -52,6 +56,7 @@ class Orchestrator:
                 self._run_mic(mic, scorer), name="mic"
             ),
             asyncio.create_task(scorer.run(), name="scorer"),
+            asyncio.create_task(snapshotter.run(), name="report"),
         ]
 
         log.info("All collectors started")

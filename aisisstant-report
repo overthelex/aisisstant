@@ -1,0 +1,943 @@
+#!/usr/bin/env python3
+"""Xsistant Projects Report.
+
+Reads the pre-computed JSON snapshot produced by the background
+ReportSnapshotter task of the main tracker service. That is why the
+window opens instantly — no DB roundtrip on user click.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+
+from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
+
+_HERE = Path(__file__).resolve().parent
+if (_HERE / "aisisstant" / "__init__.py").is_file():
+    sys.path.insert(0, str(_HERE))
+
+from aisisstant.report import RANGES, cache_path  # noqa: E402
+
+APP_ID = "com.aisisstant.Report"
+APP_NAME = "Xsistant Report"
+
+_RANGE_LABELS = {
+    "1h": "Last Hour",
+    "3h": "Last 3 Hours",
+    "8h": "Last 8 Hours",
+    "24h": "Today",
+    "2d": "Last 2 Days",
+    "3d": "Last 3 Days",
+    "7d": "Last 7 Days",
+}
+
+# Saturated category colors that read well on both light and dark themes,
+# echoing the palette macOS Screen Time uses for its category badges.
+_BUCKET_COLORS = {
+    "terminal": (51, 209, 122),
+    "browser":  (53, 132, 228),
+    "editor":   (245, 194, 17),
+    "other":    (154, 153, 150),
+}
+
+_BUCKET_LABELS = {
+    "terminal": "Terminal",
+    "browser":  "Browser",
+    "editor":   "Editor",
+    "other":    "Other",
+}
+
+_BUCKET_ICONS = {
+    "terminal": "utilities-terminal-symbolic",
+    "browser": "web-browser-symbolic",
+    "editor": "accessories-text-editor-symbolic",
+    "other": "application-x-executable-symbolic",
+}
+
+# Stable visual order so the stacked bar doesn't reshuffle between refreshes.
+_BUCKET_ORDER = ["terminal", "editor", "browser", "other"]
+
+_UI_POLL_SECONDS = 2
+
+_CSS_BASE = """
+.xs-hero-card {
+    background-color: rgba(127, 127, 127, 0.08);
+    border-radius: 16px;
+    padding: 22px 24px;
+}
+.xs-hero-title {
+    font-size: 10pt;
+    font-weight: 600;
+    opacity: 0.55;
+    letter-spacing: 0.08em;
+}
+.xs-hero-total {
+    font-size: 34pt;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+.xs-hero-sub {
+    font-size: 10pt;
+    opacity: 0.55;
+}
+.xs-section-title {
+    font-size: 10pt;
+    font-weight: 700;
+    opacity: 0.6;
+    letter-spacing: 0.08em;
+}
+.xs-project-name {
+    font-size: 11pt;
+    font-weight: 600;
+}
+.xs-project-sub {
+    font-size: 9pt;
+    opacity: 0.55;
+}
+.xs-project-duration {
+    font-size: 12pt;
+    font-weight: 600;
+    font-feature-settings: "tnum";
+}
+.xs-bucket-icon {
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 9px;
+    color: white;
+}
+.xs-legend-dot {
+    min-width: 10px;
+    min-height: 10px;
+    border-radius: 5px;
+}
+.xs-legend-label {
+    font-size: 10pt;
+    opacity: 0.75;
+}
+.xs-legend-value {
+    font-size: 10pt;
+    font-weight: 700;
+    font-feature-settings: "tnum";
+}
+"""
+
+
+def _build_css() -> str:
+    parts = [_CSS_BASE]
+    for bucket, (r, g, b) in _BUCKET_COLORS.items():
+        parts.append(
+            f".xs-bucket-{bucket} {{ background-color: rgb({r},{g},{b}); }}"
+        )
+        parts.append(
+            f".xs-dot-{bucket} {{ background-color: rgb({r},{g},{b}); }}"
+        )
+    return "\n".join(parts)
+
+
+def _fmt_big_duration(seconds: float) -> str:
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s}s"
+    h, rem = divmod(s, 3600)
+    m, _ = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:d}m"
+    return f"{m}m"
+
+
+def _fmt_duration(seconds: float) -> str:
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
+
+
+def _fmt_relative(ts_iso: str) -> str:
+    try:
+        t = datetime.fromisoformat(ts_iso)
+    except Exception:
+        return ts_iso
+    delta = datetime.now(t.tzinfo) - t
+    secs = int(delta.total_seconds())
+    if secs < 2:
+        return "just now"
+    if secs < 60:
+        return f"{secs}s ago"
+    m, s = divmod(secs, 60)
+    if m < 60:
+        return f"{m}m ago"
+    return f"{m // 60}h {m % 60:02d}m ago"
+
+
+# ---------------------------------------------------------------------------
+# Project grouping
+# ---------------------------------------------------------------------------
+
+# Signal tokens that look plausible as project names but are almost never
+# the actual project the user is working on. We ignore these during matching.
+_PROJECT_STOPWORDS = {
+    "src", "repos", "code", "work", "projects", "documents", "home",
+    "bin", "tmp", "local", "desktop", "downloads", "public",
+    "terminal", "browser", "editor", "other",
+    "aisisstant-stats", "aisisstant-report", "aisisstant-setup",
+}
+
+_PROJECT_CONFIG_ENV = "AISISSTANT_PROJECTS"
+_PROJECT_CONFIG_PATHS = [
+    Path.home() / ".config" / "aisisstant" / "projects.json",
+]
+
+_PROJECT_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,}")
+
+
+def _normalize_token(tok: str) -> str:
+    return tok.strip().lower().replace("_", "-")
+
+
+def discover_known_projects() -> list[str]:
+    """Build a canonical project list.
+
+    Priority: explicit config (file or env) → immediate git-repo subdirs of
+    $HOME. Dedupes case-insensitively while preserving the prettiest form
+    we saw (typically the on-disk directory name).
+    """
+    seen: dict[str, str] = {}
+
+    def _add(name: str):
+        key = _normalize_token(name)
+        if not key or key in _PROJECT_STOPWORDS:
+            return
+        if key in seen:
+            # Prefer the shorter (less noisy) variant as canonical.
+            if len(name) < len(seen[key]):
+                seen[key] = name
+            return
+        seen[key] = name
+
+    env = os.environ.get(_PROJECT_CONFIG_ENV)
+    if env:
+        for item in env.split(":"):
+            _add(item)
+
+    for cfg_path in _PROJECT_CONFIG_PATHS:
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    _add(item)
+        elif isinstance(data, dict) and isinstance(data.get("projects"), list):
+            for item in data["projects"]:
+                if isinstance(item, str):
+                    _add(item)
+
+    try:
+        for entry in Path.home().iterdir():
+            try:
+                if entry.is_dir() and (entry / ".git").exists():
+                    _add(entry.name)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+    # Order: longest keys first so substring matches prefer the
+    # most specific project (e.g. "secondlayer-core" before "secondlayer").
+    return [seen[k] for k in sorted(seen, key=lambda k: (-len(k), k))]
+
+
+def _best_project_match(text: str, known_norm: dict[str, str]) -> str | None:
+    """Find the most specific known project appearing as a token in text."""
+    low = text.lower()
+    # First: "owner/repo" slug → last component.
+    m = re.search(r"([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]+)", text)
+    if m:
+        tail = _normalize_token(m.group(2))
+        if tail in known_norm:
+            return known_norm[tail]
+    best: tuple[int, str] | None = None  # (length, canonical)
+    for tok in _PROJECT_TOKEN_RE.findall(low):
+        key = _normalize_token(tok)
+        if key in _PROJECT_STOPWORDS:
+            continue
+        canonical = known_norm.get(key)
+        if canonical and (best is None or len(key) > best[0]):
+            best = (len(key), canonical)
+    return best[1] if best else None
+
+
+def _canonical_project_for(
+    entry: dict, known_norm: dict[str, str]
+) -> str | None:
+    """Attribute a snapshot project entry to a known canonical project."""
+    # Check the entry name first — it is the strongest direct signal.
+    hit = _best_project_match(entry.get("name", ""), known_norm)
+    if hit:
+        return hit
+    for t in entry.get("titles", []):
+        for field in ("title", "wm_class"):
+            val = t.get(field, "")
+            if not val:
+                continue
+            hit = _best_project_match(val, known_norm)
+            if hit:
+                return hit
+    return None
+
+
+def group_projects(
+    projects: list[dict], known: list[str]
+) -> tuple[list[dict], float]:
+    """Collapse bucket-level projects into per-project aggregates.
+
+    Returns (groups, unclassified_seconds). Each group has:
+      name, seconds, hits, dominant_bucket, buckets (per-bucket seconds),
+      titles (top combined), sample_count, is_known.
+    """
+    known_norm = {_normalize_token(k): k for k in known}
+    groups: dict[str, dict] = {}
+    unclassified = 0.0
+
+    for p in projects:
+        canon = _canonical_project_for(p, known_norm)
+        secs = p.get("seconds", 0.0) or 0.0
+        if canon is None:
+            unclassified += secs
+            continue
+        g = groups.get(canon)
+        if g is None:
+            g = {
+                "name": canon,
+                "seconds": 0.0,
+                "hits": 0,
+                "buckets": {},
+                "titles": [],
+                "is_known": True,
+            }
+            groups[canon] = g
+        g["seconds"] += secs
+        g["hits"] += p.get("hits", 0)
+        b = p.get("bucket", "other")
+        g["buckets"][b] = g["buckets"].get(b, 0.0) + secs
+        g["titles"].extend(p.get("titles", []))
+
+    if unclassified > 0:
+        groups["__unclassified__"] = {
+            "name": "Unclassified",
+            "seconds": unclassified,
+            "hits": 0,
+            "buckets": {},
+            "titles": [],
+            "is_known": False,
+        }
+
+    out: list[dict] = []
+    for g in groups.values():
+        if g["buckets"]:
+            g["dominant_bucket"] = max(
+                g["buckets"].items(), key=lambda kv: kv[1]
+            )[0]
+        else:
+            g["dominant_bucket"] = "other"
+        g["titles"].sort(
+            key=lambda t: t.get("seconds", 0.0), reverse=True
+        )
+        g["titles"] = g["titles"][:8]
+        out.append(g)
+    out.sort(key=lambda g: g["seconds"], reverse=True)
+    return out, unclassified
+
+
+def _rounded_rect_path(cr, x, y, w, h, r):
+    if w <= 0 or h <= 0:
+        return
+    if w < 2 * r:
+        r = w / 2
+    if h < 2 * r:
+        r = h / 2
+    if r < 0.5:
+        cr.rectangle(x, y, w, h)
+        return
+    cr.new_path()
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.arc(x + w - r, y + r, r, 3 * math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.close_path()
+
+
+class StackedBar(Gtk.DrawingArea):
+    """Horizontal stacked summary of category proportions."""
+
+    def __init__(self):
+        super().__init__()
+        self.set_content_height(12)
+        self.set_hexpand(True)
+        self._segments: list[tuple[tuple[int, int, int], float]] = []
+        self.set_draw_func(self._draw)
+
+    def set_segments(self, segments):
+        self._segments = list(segments)
+        self.queue_draw()
+
+    def _draw(self, area, cr, width, height):
+        radius = height / 2
+        _rounded_rect_path(cr, 0, 0, width, height, radius)
+        cr.clip()
+
+        cr.set_source_rgba(0.5, 0.5, 0.5, 0.18)
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
+
+        total = sum(frac for _, frac in self._segments)
+        if total <= 0:
+            return
+        x = 0.0
+        for color, frac in self._segments:
+            if frac <= 0:
+                continue
+            w = width * (frac / total)
+            r, g, b = color
+            cr.set_source_rgba(r / 255, g / 255, b / 255, 1.0)
+            cr.rectangle(x, 0, w + 0.5, height)
+            cr.fill()
+            x += w
+
+
+class MiniBar(Gtk.DrawingArea):
+    """Thin progress indicator attached to each project row."""
+
+    def __init__(self):
+        super().__init__()
+        self.set_content_height(5)
+        self.set_hexpand(True)
+        self._color = (154, 153, 150)
+        self._frac = 0.0
+        self.set_draw_func(self._draw)
+
+    def set_data(self, color: tuple[int, int, int], frac: float):
+        self._color = color
+        self._frac = max(0.0, min(1.0, frac))
+        self.queue_draw()
+
+    def _draw(self, area, cr, width, height):
+        radius = height / 2
+        _rounded_rect_path(cr, 0, 0, width, height, radius)
+        cr.set_source_rgba(0.5, 0.5, 0.5, 0.15)
+        cr.fill()
+        if self._frac <= 0:
+            return
+        fw = max(height, width * self._frac)
+        _rounded_rect_path(cr, 0, 0, fw, height, radius)
+        r, g, b = self._color
+        cr.set_source_rgba(r / 255, g / 255, b / 255, 1.0)
+        cr.fill()
+
+
+def _make_legend_item(bucket: str, seconds: float) -> Gtk.Widget:
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    box.set_valign(Gtk.Align.CENTER)
+
+    dot = Gtk.Box()
+    dot.add_css_class("xs-legend-dot")
+    dot.add_css_class(f"xs-dot-{bucket}")
+    dot.set_valign(Gtk.Align.CENTER)
+    box.append(dot)
+
+    text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    name = Gtk.Label(
+        xalign=0, label=_BUCKET_LABELS.get(bucket, bucket.title())
+    )
+    name.add_css_class("xs-legend-label")
+    value = Gtk.Label(xalign=0, label=_fmt_duration(seconds))
+    value.add_css_class("xs-legend-value")
+    text.append(name)
+    text.append(value)
+    box.append(text)
+    return box
+
+
+def _bucket_breakdown_text(buckets: dict) -> str:
+    parts = []
+    for b in _BUCKET_ORDER:
+        secs = buckets.get(b, 0.0)
+        if secs > 0:
+            parts.append(f"{_BUCKET_LABELS.get(b, b)} {_fmt_duration(secs)}")
+    return " · ".join(parts)
+
+
+def _make_group_row(group: dict, total_seconds: float) -> Gtk.Widget:
+    name = group.get("name", "?")
+    secs = group.get("seconds", 0.0) or 0.0
+    buckets = group.get("buckets", {}) or {}
+    dominant = group.get("dominant_bucket", "other")
+    is_known = group.get("is_known", True)
+    frac = (secs / total_seconds) if total_seconds > 0 else 0.0
+
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+    row.set_margin_start(14)
+    row.set_margin_end(14)
+    row.set_margin_top(12)
+    row.set_margin_bottom(12)
+
+    icon_bg = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+    icon_bg.add_css_class("xs-bucket-icon")
+    icon_bg.add_css_class(f"xs-bucket-{dominant}")
+    icon_name = (
+        "folder-symbolic" if is_known
+        else "question-round-symbolic"
+    )
+    icon = Gtk.Image.new_from_icon_name(icon_name)
+    icon.set_pixel_size(18)
+    icon_bg.append(icon)
+    row.append(icon_bg)
+
+    middle = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    middle.set_hexpand(True)
+    middle.set_valign(Gtk.Align.CENTER)
+
+    top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    name_label = Gtk.Label(xalign=0, hexpand=True)
+    name_label.set_ellipsize(Pango.EllipsizeMode.END)
+    name_label.set_text(name)
+    name_label.add_css_class("xs-project-name")
+    top.append(name_label)
+
+    dur_label = Gtk.Label(label=_fmt_duration(secs), xalign=1)
+    dur_label.add_css_class("xs-project-duration")
+    top.append(dur_label)
+    middle.append(top)
+
+    sub_text = _bucket_breakdown_text(buckets)
+    if not sub_text:
+        sub_text = f"{frac * 100:.1f}% of total"
+    else:
+        sub_text = f"{sub_text} · {frac * 100:.1f}%"
+    sub_label = Gtk.Label(xalign=0, label=sub_text)
+    sub_label.set_ellipsize(Pango.EllipsizeMode.END)
+    sub_label.add_css_class("xs-project-sub")
+    middle.append(sub_label)
+
+    bar = MiniBar()
+    bar.set_data(
+        _BUCKET_COLORS.get(dominant, _BUCKET_COLORS["other"]), frac
+    )
+    bar.set_margin_top(4)
+    middle.append(bar)
+
+    row.append(middle)
+    return row
+
+
+def _make_project_row(proj: dict, total_seconds: float) -> Gtk.Widget:
+    bucket = proj.get("bucket", "other")
+    name = proj.get("name", "?")
+    secs = proj.get("seconds", 0.0) or 0.0
+    hits = proj.get("hits", 0)
+    frac = (secs / total_seconds) if total_seconds > 0 else 0.0
+
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+    row.set_margin_start(14)
+    row.set_margin_end(14)
+    row.set_margin_top(12)
+    row.set_margin_bottom(12)
+
+    icon_bg = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+    icon_bg.add_css_class("xs-bucket-icon")
+    icon_bg.add_css_class(f"xs-bucket-{bucket}")
+    icon = Gtk.Image.new_from_icon_name(
+        _BUCKET_ICONS.get(bucket, _BUCKET_ICONS["other"])
+    )
+    icon.set_pixel_size(18)
+    icon_bg.append(icon)
+    row.append(icon_bg)
+
+    middle = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    middle.set_hexpand(True)
+    middle.set_valign(Gtk.Align.CENTER)
+
+    top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    name_label = Gtk.Label(xalign=0, hexpand=True)
+    name_label.set_ellipsize(Pango.EllipsizeMode.END)
+    name_label.set_text(name)
+    name_label.add_css_class("xs-project-name")
+    top.append(name_label)
+
+    dur_label = Gtk.Label(label=_fmt_duration(secs), xalign=1)
+    dur_label.add_css_class("xs-project-duration")
+    top.append(dur_label)
+    middle.append(top)
+
+    sub_label = Gtk.Label(xalign=0)
+    sub_label.set_text(
+        f"{_BUCKET_LABELS.get(bucket, bucket)} · "
+        f"{hits} samples · {frac * 100:.1f}%"
+    )
+    sub_label.set_ellipsize(Pango.EllipsizeMode.END)
+    sub_label.add_css_class("xs-project-sub")
+    middle.append(sub_label)
+
+    bar = MiniBar()
+    bar.set_data(_BUCKET_COLORS.get(bucket, _BUCKET_COLORS["other"]), frac)
+    bar.set_margin_top(4)
+    middle.append(bar)
+
+    row.append(middle)
+    return row
+
+
+class ReportWindow(Adw.ApplicationWindow):
+    def __init__(self, app: Adw.Application):
+        super().__init__(application=app)
+        self.set_title(APP_NAME)
+        self.set_default_size(860, 720)
+
+        self._cache_path = cache_path()
+        self._last_mtime = 0.0
+        self._cached: dict | None = None
+        self._current_range_key = "24h"
+        self._group_mode = "activity"  # "activity" | "project"
+        self._known_projects = discover_known_projects()
+
+        toolbar = Adw.ToolbarView()
+        self.set_content(toolbar)
+
+        header = Adw.HeaderBar()
+        header.add_css_class("flat")
+        toolbar.add_top_bar(header)
+
+        range_keys = [k for k, _ in RANGES]
+        self._range_keys = range_keys
+        self._range_dropdown = Gtk.DropDown.new_from_strings(
+            [_RANGE_LABELS.get(k, k) for k in range_keys]
+        )
+        default_idx = range_keys.index("24h") if "24h" in range_keys else 0
+        self._range_dropdown.set_selected(default_idx)
+        self._range_dropdown.connect(
+            "notify::selected", self._on_range_changed
+        )
+        header.pack_start(self._range_dropdown)
+
+        # Segmented control: switch between per-activity and per-project views.
+        toggle_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        toggle_box.add_css_class("linked")
+        self._activity_btn = Gtk.ToggleButton(label="Activity")
+        self._project_btn = Gtk.ToggleButton(label="Project")
+        self._project_btn.set_group(self._activity_btn)
+        self._activity_btn.set_active(True)
+        self._activity_btn.connect(
+            "toggled", lambda *_: self._on_group_toggled()
+        )
+        self._project_btn.connect(
+            "toggled", lambda *_: self._on_group_toggled()
+        )
+        toggle_box.append(self._activity_btn)
+        toggle_box.append(self._project_btn)
+        header.pack_start(toggle_box)
+
+        self._refresh_btn = Gtk.Button.new_from_icon_name(
+            "view-refresh-symbolic"
+        )
+        self._refresh_btn.set_tooltip_text("Reload from cache")
+        self._refresh_btn.add_css_class("flat")
+        self._refresh_btn.connect(
+            "clicked", lambda *_: self._reload(force=True)
+        )
+        header.pack_end(self._refresh_btn)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(760)
+        clamp.set_tightening_threshold(640)
+        clamp.set_margin_top(16)
+        clamp.set_margin_bottom(28)
+        clamp.set_margin_start(20)
+        clamp.set_margin_end(20)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        clamp.set_child(body)
+        scroll.set_child(clamp)
+        toolbar.set_content(scroll)
+
+        # Hero card: range label, big total, stacked bar, legend.
+        hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        hero.add_css_class("xs-hero-card")
+
+        self._range_label = Gtk.Label(xalign=0, label="TODAY")
+        self._range_label.add_css_class("xs-hero-title")
+        hero.append(self._range_label)
+
+        self._total_label = Gtk.Label(xalign=0, label="—")
+        self._total_label.add_css_class("xs-hero-total")
+        hero.append(self._total_label)
+
+        self._hero_sub = Gtk.Label(xalign=0, label="")
+        self._hero_sub.add_css_class("xs-hero-sub")
+        hero.append(self._hero_sub)
+
+        self._stacked_bar = StackedBar()
+        self._stacked_bar.set_margin_top(16)
+        hero.append(self._stacked_bar)
+
+        self._legend = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=22
+        )
+        self._legend.set_margin_top(14)
+        hero.append(self._legend)
+        body.append(hero)
+
+        section = Gtk.Label(xalign=0, label="MOST USED")
+        section.add_css_class("xs-section-title")
+        section.set_margin_top(6)
+        section.set_margin_start(6)
+        body.append(section)
+
+        self._list_box = Gtk.ListBox()
+        self._list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._list_box.add_css_class("boxed-list")
+        body.append(self._list_box)
+
+        self._status_label = Gtk.Label(xalign=0)
+        self._status_label.add_css_class("dim-label")
+        self._status_label.set_margin_top(8)
+        self._status_label.set_margin_start(6)
+        body.append(self._status_label)
+
+        self._reload(force=True)
+        GLib.timeout_add_seconds(_UI_POLL_SECONDS, self._on_tick)
+
+    def _on_range_changed(self, *_):
+        idx = self._range_dropdown.get_selected()
+        if 0 <= idx < len(self._range_keys):
+            self._current_range_key = self._range_keys[idx]
+            self._render()
+
+    def _on_group_toggled(self) -> None:
+        new_mode = "project" if self._project_btn.get_active() else "activity"
+        if new_mode == self._group_mode:
+            return
+        self._group_mode = new_mode
+        self._render()
+
+    def _on_tick(self) -> bool:
+        self._reload(force=False)
+        if self._cached:
+            self._set_status()
+        return True
+
+    def _reload(self, force: bool) -> None:
+        try:
+            st = self._cache_path.stat()
+        except FileNotFoundError:
+            if force or self._cached is None:
+                self._clear_list()
+                self._clear_legend()
+                self._status_label.set_text(
+                    f"No snapshot yet at {self._cache_path}. "
+                    "Is the aisisstant service running?"
+                )
+                self._total_label.set_text("—")
+                self._hero_sub.set_text("")
+                self._stacked_bar.set_segments([])
+            return
+        except Exception as e:  # noqa: BLE001
+            self._clear_list()
+            self._status_label.set_text(f"Cache error: {e}")
+            return
+
+        if not force and st.st_mtime <= self._last_mtime:
+            return
+
+        try:
+            with open(self._cache_path, "r", encoding="utf-8") as f:
+                self._cached = json.load(f)
+            self._last_mtime = st.st_mtime
+        except Exception as e:  # noqa: BLE001
+            self._status_label.set_text(f"Cannot parse snapshot: {e}")
+            return
+
+        idx = self._range_dropdown.get_selected()
+        if 0 <= idx < len(self._range_keys):
+            self._current_range_key = self._range_keys[idx]
+        self._render()
+
+    def _clear_list(self) -> None:
+        child = self._list_box.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._list_box.remove(child)
+            child = nxt
+
+    def _clear_legend(self) -> None:
+        child = self._legend.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._legend.remove(child)
+            child = nxt
+
+    def _set_status(self) -> None:
+        if not self._cached:
+            return
+        gen_rel = _fmt_relative(self._cached.get("generated_at", ""))
+        self._status_label.set_text(f"Snapshot refreshed {gen_rel}")
+
+    def _render(self) -> None:
+        self._clear_list()
+        self._clear_legend()
+        if not self._cached:
+            return
+
+        data = self._cached.get("ranges", {}).get(self._current_range_key)
+        range_title = _RANGE_LABELS.get(
+            self._current_range_key, self._current_range_key
+        )
+        self._range_label.set_text(range_title.upper())
+
+        if not data:
+            self._total_label.set_text("—")
+            self._hero_sub.set_text("No data for this range.")
+            self._stacked_bar.set_segments([])
+            return
+
+        total = data.get("total_seconds", 0.0) or 0.0
+        samples = data.get("sample_count", 0)
+        projects = data.get("projects", [])
+
+        self._total_label.set_text(_fmt_big_duration(total))
+
+        per_bucket: dict[str, float] = {}
+        for p in projects:
+            b = p.get("bucket", "other")
+            per_bucket[b] = per_bucket.get(b, 0.0) + (
+                p.get("seconds", 0.0) or 0.0
+            )
+
+        segments = []
+        for b in _BUCKET_ORDER:
+            if per_bucket.get(b, 0.0) > 0:
+                segments.append(
+                    (_BUCKET_COLORS.get(b, _BUCKET_COLORS["other"]),
+                     per_bucket[b])
+                )
+        self._stacked_bar.set_segments(segments)
+
+        for b in _BUCKET_ORDER:
+            if per_bucket.get(b, 0.0) > 0:
+                self._legend.append(_make_legend_item(b, per_bucket[b]))
+
+        self._set_status()
+
+        if self._group_mode == "project":
+            groups, unclassified = group_projects(
+                projects, self._known_projects
+            )
+            known_count = sum(1 for g in groups if g.get("is_known"))
+            summary = (
+                f"{known_count} projects · {samples} samples"
+            )
+            if unclassified > 0 and total > 0:
+                pct = unclassified / total * 100
+                summary += (
+                    f" · {_fmt_duration(unclassified)} unclassified "
+                    f"({pct:.0f}%)"
+                )
+            self._hero_sub.set_text(summary)
+            self._render_groups(groups, total)
+        else:
+            self._hero_sub.set_text(
+                f"{len(projects)} entries · {samples} samples"
+            )
+            self._render_activities(projects, total)
+
+    def _render_activities(self, projects: list[dict], total: float) -> None:
+        if not projects:
+            self._list_box.append(self._empty_row(
+                "No activity recorded in this range."
+            ))
+            return
+        for proj in projects:
+            lbr = Gtk.ListBoxRow()
+            lbr.set_selectable(False)
+            lbr.set_activatable(False)
+            lbr.set_child(_make_project_row(proj, total))
+            self._list_box.append(lbr)
+
+    def _render_groups(self, groups: list[dict], total: float) -> None:
+        if not groups:
+            self._list_box.append(self._empty_row(
+                "No project activity matched in this range."
+            ))
+            return
+        for g in groups:
+            lbr = Gtk.ListBoxRow()
+            lbr.set_selectable(False)
+            lbr.set_activatable(False)
+            lbr.set_child(_make_group_row(g, total))
+            self._list_box.append(lbr)
+
+    def _empty_row(self, text: str) -> Gtk.ListBoxRow:
+        row = Gtk.ListBoxRow()
+        row.set_selectable(False)
+        label = Gtk.Label(label=text, xalign=0)
+        label.set_margin_start(16)
+        label.set_margin_end(16)
+        label.set_margin_top(18)
+        label.set_margin_bottom(18)
+        label.add_css_class("dim-label")
+        row.set_child(label)
+        return row
+
+
+class ReportApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+        self.connect("startup", self._on_startup)
+
+    def _on_startup(self, *_):
+        css = Gtk.CssProvider()
+        text = _build_css()
+        try:
+            css.load_from_string(text)
+        except AttributeError:
+            css.load_from_data(text.encode("utf-8"))
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+    def do_activate(self):
+        win = self.props.active_window
+        if win is None:
+            win = ReportWindow(self)
+        win.present()
+
+
+def main() -> int:
+    app = ReportApp()
+    return app.run(sys.argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -13,6 +13,7 @@ class Config:
     window_poll_seconds: float
     mic_poll_seconds: float
     score_window_seconds: int
+    report_snapshot_seconds: float
 
     def __init__(self):
         self.db_host = os.environ.get("DB_HOST", "127.0.0.1")
@@ -25,6 +26,9 @@ class Config:
         self.window_poll_seconds = float(os.environ.get("WINDOW_POLL_SEC", "2"))
         self.mic_poll_seconds = float(os.environ.get("MIC_POLL_SEC", "10"))
         self.score_window_seconds = int(os.environ.get("SCORE_WINDOW_SEC", "30"))
+        self.report_snapshot_seconds = float(
+            os.environ.get("REPORT_SNAPSHOT_SEC", "1")
+        )
 
     @property
     def database_url(self) -> str:
