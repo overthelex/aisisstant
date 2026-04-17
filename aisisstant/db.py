@@ -82,16 +82,32 @@ CREATE INDEX IF NOT EXISTS idx_idle_ts ON idle_events (timestamp);
 
 
 async def create_pool(config: Config) -> asyncpg.Pool:
-    pool = await asyncpg.create_pool(
-        host=config.db_host,
-        port=config.db_port,
-        database=config.db_name,
-        user=config.db_user,
-        password=config.db_password,
-        min_size=2,
-        max_size=5,
-    )
-    return pool
+    # Retry on transient connect failures: at boot Postgres (docker) may not
+    # be ready yet when aisisstant.service starts.
+    delay = 1.0
+    max_delay = 15.0
+    total_waited = 0.0
+    timeout = 120.0
+    while True:
+        try:
+            return await asyncpg.create_pool(
+                host=config.db_host,
+                port=config.db_port,
+                database=config.db_name,
+                user=config.db_user,
+                password=config.db_password,
+                min_size=2,
+                max_size=5,
+            )
+        except (OSError, asyncpg.PostgresError) as e:
+            if total_waited >= timeout:
+                raise
+            log.warning(
+                "DB connect failed (%s), retrying in %.1fs", e, delay
+            )
+            await asyncio.sleep(delay)
+            total_waited += delay
+            delay = min(delay * 2, max_delay)
 
 
 async def run_migrations(pool: asyncpg.Pool) -> None:

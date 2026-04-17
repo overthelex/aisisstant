@@ -199,14 +199,26 @@ def main() -> None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, handle_signal)
 
-        # Run orchestrator in background, wait for shutdown
+        # Run orchestrator, exiting non-zero if it crashes so systemd
+        # can restart us.
         task = asyncio.create_task(orchestrator.run())
-        await shutdown_event.wait()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        done, pending = await asyncio.wait(
+            [task, shutdown_task], return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+        if task in done:
+            exc = task.exception()
+            if exc is not None:
+                log.error("Orchestrator crashed", exc_info=exc)
+                raise SystemExit(1)
+        else:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         log.info("Aisisstant stopped")
 
     try:
