@@ -367,7 +367,7 @@ def _build_splash_content(with_next_btn=False, on_next=None):
     authors_label.set_margin_bottom(10)
     content.append(authors_label)
 
-    author1 = Gtk.Label(label="Vladimir Obcharov")
+    author1 = Gtk.Label(label="Volodymyr Ovcharov")
     author1.add_css_class("splash-author-name")
     content.append(author1)
 

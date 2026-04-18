@@ -142,4 +142,4 @@ MIT. See [debian/copyright](debian/copyright).
 
 ---
 
-<sub>Built on Ubuntu by <a href="https://github.com/overthelex">Vladimir Obcharov</a> & Claude Code.</sub>
+<sub>Built on Ubuntu by <a href="https://github.com/overthelex">Volodymyr Ovcharov</a> & Claude Code.</sub>

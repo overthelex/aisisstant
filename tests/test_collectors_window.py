@@ -42,7 +42,7 @@ class TestNormalizeTitle:
     # --- Browser suffixes ---
     def test_strips_chrome_suffix(self):
         assert WindowCollector._normalize_title(
-            "GitHub - Google Chrome - Vladimir"
+            "GitHub - Google Chrome - Volodymyr"
         ) == "GitHub"
 
     def test_strips_chrome_suffix_no_profile(self):
