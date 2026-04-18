@@ -23,7 +23,26 @@ APP_ID = "com.aisisstant.Setup"
 SERVICE_NAME = "aisisstant.service"
 EXTENSION_UUID = "aisisstant-tracker@vovkes"
 DB_CONTAINER = "aisisstant-db"
-VERSION = "2026.04.16"
+
+# CI patches _BUNDLED_VERSION at release time (see .github/workflows/ci-deploy.yml).
+# Runtime lookup below prefers the installed package metadata, so pip/source
+# installs show the real version even if this constant is stale.
+_BUNDLED_VERSION = "2026.04.16"
+
+
+def _resolve_version() -> str:
+    try:
+        from importlib.metadata import version as _pkg_version
+        raw = _pkg_version("aisisstant")
+    except Exception:
+        return _BUNDLED_VERSION
+    parts = raw.split(".")
+    if len(parts) >= 3:
+        return ".".join([parts[0]] + [p.zfill(2) for p in parts[1:3]] + parts[3:])
+    return raw
+
+
+VERSION = _resolve_version()
 
 CONFIG_DIR = Path.home() / ".config" / "aisisstant"
 CONFIG_FILE = CONFIG_DIR / "config.json"

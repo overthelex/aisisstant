@@ -97,8 +97,8 @@ jobs:
           # pyproject.toml
           sed -i -E "s/^version = \".*\"/version = \"${TAG}\"/" pyproject.toml
 
-          # aisisstant-setup VERSION constant
-          sed -i -E "s/^VERSION = \".*\"/VERSION = \"${TAG}\"/" aisisstant-setup
+          # aisisstant-setup bundled fallback version (runtime prefers importlib.metadata)
+          sed -i -E "s/^_BUNDLED_VERSION = \".*\"/_BUNDLED_VERSION = \"${TAG}\"/" aisisstant-setup
 
           # debian/changelog — prepend new entry
           DATE_RFC=$(date -R)
