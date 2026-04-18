@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0d1117" />
+<title>Xsistant — Activity Intelligence for Ubuntu</title>
+<meta name="description" content="Xsistant is an activity-aware agent for Ubuntu/GNOME that turns keyboard, mouse and window focus into per-project time — automatically." />
+
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Xsistant — Activity Intelligence for Ubuntu" />
+<meta property="og:description" content="Activity-aware agent for Ubuntu/GNOME. Turns keyboard, mouse and window focus into per-project time — automatically." />
+<meta property="og:image" content="https://xsistant.highfunk.uk/assets/readme-hero.png" />
+<meta property="og:url" content="https://xsistant.highfunk.uk/" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="icon" type="image/x-icon" href="assets/favicon.ico" />
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+<link rel="apple-touch-icon" href="assets/logo-mark-on-dark-512.png" />
+<link rel="preconnect" href="https://api.github.com" crossorigin />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="/">
+    <img src="assets/logo-mark-light.svg" alt="" width="28" height="28" />
+    <span>XSISTANT</span>
+  </a>
+  <nav class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="#roadmap">Roadmap</a>
+    <a href="https://github.com/overthelex/aisisstant" target="_blank" rel="noopener">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="hero-inner">
+    <img class="hero-mark" src="assets/logo-mark-light.svg" alt="Xsistant" width="120" height="120" />
+    <h1 class="hero-title">XSISTANT</h1>
+    <p class="hero-subtitle">ACTIVITY INTELLIGENCE</p>
+    <div class="hero-divider"></div>
+    <p class="hero-lead">
+      An activity-aware agent for Ubuntu/GNOME. Turns keyboard, mouse and window focus
+      into per-project time — automatically, without a manual timer.
+    </p>
+    <div class="hero-actions">
+      <a id="download-btn" class="btn btn-primary" href="https://github.com/overthelex/aisisstant/releases/latest" rel="noopener">
+        <span class="btn-icon" aria-hidden="true">⬇</span>
+        <span class="btn-label">
+          <strong>Download</strong>
+          <em id="download-meta">latest release · Ubuntu .deb</em>
+        </span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/overthelex/aisisstant" target="_blank" rel="noopener">
+        View source on GitHub
+      </a>
+    </div>
+    <p class="hero-meta">
+      <span id="version-pill" class="pill">loading…</span>
+      <span class="pill pill-muted">Ubuntu 22.04+</span>
+      <span class="pill pill-muted">GNOME Shell 45+</span>
+      <span class="pill pill-muted">MIT</span>
+    </p>
+  </div>
+</section>
+
+<section id="features" class="features">
+  <h2>What it does</h2>
+  <div class="feature-grid">
+    <div class="feature">
+      <div class="feature-icon">⌨</div>
+      <h3>Raw input capture</h3>
+      <p>Reads keyboard and mouse events straight from <code>/dev/input/event*</code> via <code>evdev</code>. Honest, app-agnostic counts.</p>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">🪟</div>
+      <h3>Focused-window tracking</h3>
+      <p>AT-SPI over D-Bus with <code>switchamba</code> fallback. Knows exactly which window owns your attention, not just which app.</p>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">📂</div>
+      <h3>Project attribution</h3>
+      <p>Walks <code>/proc/&lt;pid&gt;/cwd</code> for the focused process and its children. Titles lie — working directories don't.</p>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">🐘</div>
+      <h3>PostgreSQL storage</h3>
+      <p>Dockerized Postgres 16 as the backing store. Second-level resolution, SQL-queryable, never leaves your box.</p>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">🎛</div>
+      <h3>GNOME top-bar indicator</h3>
+      <p>Live activity badge, pause/resume, stats panel, and full-quit — all from the Shell panel.</p>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">📦</div>
+      <h3>Native .deb</h3>
+      <p>Built via <code>dpkg-buildpackage</code> on every push to master. CalVer versioning. One <code>apt install</code> away.</p>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="install">
+  <h2>Install</h2>
+  <div class="install-grid">
+    <div class="install-col">
+      <h3>From the .deb</h3>
+      <pre><code>sudo apt install ./<span id="deb-name">aisisstant_*.deb</span>
+gnome-extensions enable aisisstant-tracker@vovkes</code></pre>
+      <p class="muted">Download the package above, then run these two commands.</p>
+    </div>
+    <div class="install-col">
+      <h3>From source</h3>
+      <pre><code>git clone https://github.com/overthelex/aisisstant.git
+cd aisisstant
+./scripts/install.sh
+gnome-extensions enable aisisstant-tracker@vovkes</code></pre>
+      <p class="muted">Installs Python deps, starts Postgres via Docker Compose, registers the systemd user service, copies the GNOME extension.</p>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap" class="roadmap">
+  <h2>What's next</h2>
+  <div class="roadmap-card">
+    <div class="roadmap-tag">coming up</div>
+    <h3>Plane integration — worklog without a stopwatch</h3>
+    <p>
+      Xsistant already knows which <em>project</em> you're in. The next layer matches the active
+      <em>task</em> — by branch name (<code>feature/PROJ-123-…</code>), IDE window title, or an explicit
+      pick in the top-bar indicator — and writes minutes back to Plane via its API.
+    </p>
+    <p>No manual time entry. Honest numbers at the end of the sprint.</p>
+  </div>
+</section>
+
+<section class="tech">
+  <h2>Stack</h2>
+  <div class="tech-pills">
+    <span class="tech-pill">Python 3.12</span>
+    <span class="tech-pill">asyncio</span>
+    <span class="tech-pill">asyncpg</span>
+    <span class="tech-pill">evdev</span>
+    <span class="tech-pill">pydbus</span>
+    <span class="tech-pill">PostgreSQL 16</span>
+    <span class="tech-pill">Docker Compose</span>
+    <span class="tech-pill">GTK 4</span>
+    <span class="tech-pill">libadwaita</span>
+    <span class="tech-pill">GNOME Shell ext.</span>
+    <span class="tech-pill">systemd --user</span>
+    <span class="tech-pill">AT-SPI / D-Bus</span>
+    <span class="tech-pill">dpkg-buildpackage</span>
+    <span class="tech-pill">GitHub Actions</span>
+    <span class="tech-pill">CalVer</span>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <p>
+    Built on Ubuntu by
+    <a href="https://github.com/overthelex" target="_blank" rel="noopener">Volodymyr Ovcharov</a>
+    &amp; Claude Code.
+  </p>
+  <p class="muted"><small>© 2026 · MIT License · xsistant.highfunk.uk</small></p>
+</footer>
+
+<script src="app.js" defer></script>
+</body>
+</html>
